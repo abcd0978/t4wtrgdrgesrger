@@ -131,7 +131,8 @@ export default function App() {
             setBuffer(merged);
             setBounds(computeBounds(merged));
             setStatus(`streaming ${i + 1}/${limit} — ${merged.length / 8} gaussians`);
-            await new Promise((r) => setTimeout(r, 0)); // yield: let React commit + paint
+            // yield ~2 frames so React commits and the splat renderer actually paints
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
           }
         }
       }
@@ -179,7 +180,7 @@ export default function App() {
         {buffer && bounds && (
           <>
             <FitCamera bounds={bounds} />
-            <SplatRenderContext>
+            <SplatRenderContext key={buffer.length}>
               <SplatObject buffer={buffer} />
             </SplatRenderContext>
           </>
