@@ -1,0 +1,64 @@
+import React from "react";
+import { type RenderSettings, DEFAULT_SETTINGS } from "../RenderSettings";
+import { type GridOpts } from "./SceneObjects";
+
+function NumSlider({
+  label, k, min, max, step, settings, setSettings,
+}: {
+  label: string; k: keyof RenderSettings; min: number; max: number; step: number;
+  settings: RenderSettings; setSettings: React.Dispatch<React.SetStateAction<RenderSettings>>;
+}) {
+  return (
+    <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+      <span style={{ width: 84 }}>{label}</span>
+      <input type="range" min={min} max={max} step={step} value={settings[k]}
+        onChange={(e) => setSettings((s) => ({ ...s, [k]: parseFloat(e.target.value) }))} style={{ flex: 1 }} />
+      <span style={{ width: 46, textAlign: "right" }}>{settings[k]}</span>
+    </label>
+  );
+}
+
+export interface SceneOpts {
+  bg: string; setBg: (v: string) => void;
+  showGrid: boolean; setShowGrid: (v: boolean) => void;
+  grid: GridOpts; setGrid: React.Dispatch<React.SetStateAction<GridOpts>>;
+  dpr: number; setDpr: (v: number) => void;
+  showAxes: boolean; setShowAxes: (v: boolean) => void;
+}
+
+export function SettingsPanel({
+  settings, setSettings, scene,
+}: {
+  settings: RenderSettings;
+  setSettings: React.Dispatch<React.SetStateAction<RenderSettings>>;
+  scene: SceneOpts;
+}) {
+  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes } = scene;
+  return (
+    <div style={{
+      position: "absolute", zIndex: 3, top: 46, right: 8, width: 280,
+      display: "flex", flexDirection: "column", gap: 6, padding: 10,
+      background: "rgba(0,0,0,0.78)", color: "#fff", font: "12px monospace", borderRadius: 6,
+      maxHeight: "85vh", overflowY: "auto",
+    }}>
+      <b>shader</b>
+      <NumSlider label="splat size" k="splatScale" min={0.1} max={5} step={0.1} settings={settings} setSettings={setSettings} />
+      <NumSlider label="min px" k="minSplatPx" min={0} max={20} step={0.5} settings={settings} setSettings={setSettings} />
+      <NumSlider label="max px" k="maxSplatPx" min={16} max={2048} step={16} settings={settings} setSettings={setSettings} />
+      <NumSlider label="blur" k="blur" min={0} max={2} step={0.05} settings={settings} setSettings={setSettings} />
+      <NumSlider label="opacity" k="opacityScale" min={0} max={3} step={0.05} settings={settings} setSettings={setSettings} />
+      <NumSlider label="cull" k="cullThreshold" min={0} max={1} step={0.01} settings={settings} setSettings={setSettings} />
+      <NumSlider label="falloff" k="falloffCutoff" min={1} max={9} step={0.25} settings={settings} setSettings={setSettings} />
+      <NumSlider label="alphaTest" k="alphaTest" min={0} max={0.5} step={0.01} settings={settings} setSettings={setSettings} />
+      <NumSlider label="fade" k="fadeSpeed" min={0.1} max={10} step={0.1} settings={settings} setSettings={setSettings} />
+      <b>scene</b>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ width: 84 }}>background</span><input type="color" value={bg} onChange={(e) => setBg(e.target.value)} /></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} /> grid <input type="color" value={grid.color} onChange={(e) => setGrid((g) => ({ ...g, color: e.target.value }))} /></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}><span style={{ width: 84 }}>grid div</span><input type="range" min={2} max={60} step={1} value={grid.divisions} onChange={(e) => setGrid((g) => ({ ...g, divisions: parseInt(e.target.value) }))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{grid.divisions}</span></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)</label>
+      <button onClick={() => setSettings(DEFAULT_SETTINGS)} style={{ padding: "4px 8px", marginTop: 4 }}>reset shader</button>
+    </div>
+  );
+}
