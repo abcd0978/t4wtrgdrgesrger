@@ -119,7 +119,7 @@ function InputController({
       const v = new THREE.Vector3();
       const out = additive ? new Set(selectionRef.current) : new Set<number>();
       if (single) {
-        let best = -1, bestD = 400; // 20px radius²
+        let best = -1, bestD = 400;
         for (let i = 0; i < n; i++) {
           const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
           v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)).project(camera);
@@ -145,7 +145,6 @@ function InputController({
     const down = (e: PointerEvent) => {
       const now = performance.now();
       if (now - lastUp < 300 && Math.hypot(e.clientX - lx, e.clientY - ly) < 12) {
-        // double-click: enter select drag, block camera
         sel = true; sx = e.clientX; sy = e.clientY;
         setSelecting(true);
         setDrag({ x0: sx, y0: sy, x1: sx, y1: sy });
@@ -173,30 +172,34 @@ function InputController({
   return null;
 }
 
-/** Translate gizmo for the current selection; commits delta on release. */
+/** Translate gizmo; reports incremental deltas live while dragging. */
 function MoveGizmo({
-  selection, buffer, onCommit,
+  selection, buffer, onStart, onMove, onEnd,
 }: {
-  selection: Set<number>; buffer: Uint32Array | null; onCommit: (dx: number, dy: number, dz: number) => void;
+  selection: Set<number>; buffer: Uint32Array | null;
+  onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void;
 }) {
   const gref = React.useRef<THREE.Group>(null);
-  const start = React.useRef(new THREE.Vector3());
+  const last = React.useRef(new THREE.Vector3());
   React.useEffect(() => {
     if (gref.current && buffer && selection.size > 0) {
       const c = selCenter(buffer, selection);
       gref.current.position.set(c[0], c[1], c[2]);
+      last.current.set(c[0], c[1], c[2]);
     }
   }, [selection, buffer]);
   if (!buffer || selection.size === 0) return null;
   return (
     <TransformControls
       mode="translate"
-      onMouseDown={() => { if (gref.current) start.current.copy(gref.current.position); }}
-      onMouseUp={() => {
+      onMouseDown={() => { if (gref.current) last.current.copy(gref.current.position); onStart(); }}
+      onObjectChange={() => {
         if (!gref.current) return;
         const p = gref.current.position;
-        onCommit(p.x - start.current.x, p.y - start.current.y, p.z - start.current.z);
+        const dx = p.x - last.current.x, dy = p.y - last.current.y, dz = p.z - last.current.z;
+        if (dx || dy || dz) { onMove(dx, dy, dz); last.current.copy(p); }
       }}
+      onMouseUp={() => onEnd()}
     >
       <group ref={gref} />
     </TransformControls>
@@ -238,10 +241,14 @@ export default function App() {
   const [dpr, setDpr] = React.useState(1.5);
   const [showAxes, setShowAxes] = React.useState(false);
 
-  // selection
+  // selection + editing
   const [selection, setSelection] = React.useState<Set<number>>(new Set());
   const [drag, setDrag] = React.useState<DragRect | null>(null);
   const [selecting, setSelecting] = React.useState(false);
+  const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
+  const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
+  const originalBuffer = React.useRef<Uint32Array | null>(null);
+  const dragWork = React.useRef<Uint32Array | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
   const selectionRef = React.useRef<Set<number>>(selection);
   bufferRef.current = buffer;
@@ -251,12 +258,14 @@ export default function App() {
 
   async function load() {
     setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
+    setUndoStack([]); setLiveBuffer(null); originalBuffer.current = null;
     try {
+      let final: Uint32Array | null = null;
       if (mode === "snapshot") {
         setStatus("fetching snapshot…");
-        const merged = npzToPacked(await unzipNpz(await getSnapshot(host, runId)));
-        setBuffer(merged); setBounds(computeBounds(merged));
-        setStatus(`done: ${merged.length / 8} gaussians`);
+        final = npzToPacked(await unzipNpz(await getSnapshot(host, runId)));
+        setBuffer(final); setBounds(computeBounds(final));
+        setStatus(`done: ${final.length / 8} gaussians`);
       } else {
         setStatus("fetching manifest…");
         const manifest = await getDeltaManifest(host, runId);
@@ -276,12 +285,15 @@ export default function App() {
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
           }
         }
+        final = capacity;
       }
+      if (final) originalBuffer.current = final.slice();
     } catch (e) {
       setStatus("error: " + (e as Error).message);
     } finally { setBusy(false); }
   }
 
+  // highlight (when not mid-drag)
   const shownBuffer = React.useMemo(() => {
     if (!buffer || selection.size === 0) return buffer;
     const hb = buffer.slice();
@@ -290,18 +302,47 @@ export default function App() {
     return hb;
   }, [buffer, selection]);
 
-  function commitMove(dx: number, dy: number, dz: number) {
-    if (!buffer || (dx === 0 && dy === 0 && dz === 0)) return;
-    const nb = buffer.slice();
-    const dv = new DataView(nb.buffer);
+  function onDragStart() {
+    if (!buffer) return;
+    setUndoStack((s) => [...s.slice(-29), buffer]); // keep last 30 states
+    dragWork.current = buffer.slice();
+    setLiveBuffer(dragWork.current.subarray());
+  }
+  function onDragMove(dx: number, dy: number, dz: number) {
+    const w = dragWork.current;
+    if (!w) return;
+    const dv = new DataView(w.buffer);
     for (const i of selection) {
       dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
       dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
       dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
     }
-    setBuffer(nb); setBounds(computeBounds(nb));
+    setLiveBuffer(w.subarray()); // fresh ref, same data -> live in-place update
+  }
+  function onDragEnd() {
+    const w = dragWork.current;
+    if (!w) return;
+    setBuffer(w); setBounds(computeBounds(w));
+    setLiveBuffer(null); dragWork.current = null;
   }
 
+  function undo() {
+    setUndoStack((s) => {
+      if (s.length === 0) return s;
+      const prev = s[s.length - 1];
+      setBuffer(prev); setBounds(computeBounds(prev)); setLiveBuffer(null);
+      return s.slice(0, -1);
+    });
+  }
+  function reset() {
+    const ob = originalBuffer.current;
+    if (!ob) return;
+    const copy = ob.slice();
+    setBuffer(copy); setBounds(computeBounds(copy));
+    setSelection(new Set()); setUndoStack([]); setLiveBuffer(null);
+  }
+
+  const display = liveBuffer ?? shownBuffer;
   const inputStyle: React.CSSProperties = { padding: 4 };
 
   return (
@@ -312,7 +353,7 @@ export default function App() {
         background: "rgba(0,0,0,0.65)", color: "#fff", font: "13px monospace",
       }}>
         <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ ...inputStyle, flex: 1, minWidth: 110 }} />
-        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 160 }}>
+        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 150 }}>
           {runs.length === 0 && <option value={runId}>{runId}</option>}
           {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
         </select>
@@ -320,11 +361,13 @@ export default function App() {
           <option value="snapshot">snapshot</option>
           <option value="delta">delta</option>
         </select>
-        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ ...inputStyle, width: 55 }} />}
+        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ ...inputStyle, width: 50 }} />}
         <button onClick={load} disabled={busy} style={{ padding: "4px 12px" }}>{busy ? "…" : "Load"}</button>
+        <button onClick={undo} disabled={undoStack.length === 0} style={{ padding: "4px 8px" }}>undo</button>
+        <button onClick={reset} disabled={!originalBuffer.current} style={{ padding: "4px 8px" }}>reset</button>
         {selection.size > 0 && <button onClick={() => setSelection(new Set())} style={{ padding: "4px 8px" }}>clear ({selection.size})</button>}
         <button onClick={() => setShowPanel((v) => !v)} style={{ padding: "4px 10px" }}>⚙</button>
-        <span style={{ flex: 2, minWidth: 90 }} title="double-click to pick, double-click+drag to box-select">{status}</span>
+        <span style={{ flex: 2, minWidth: 80 }} title="double-click = pick · double-click+drag = box select · gizmo = move">{status}</span>
       </div>
 
       {showPanel && (
@@ -369,14 +412,14 @@ export default function App() {
         <OrbitControls makeDefault enabled={!selecting} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
-        {buffer && selection.size > 0 && <MoveGizmo selection={selection} buffer={buffer} onCommit={commitMove} />}
+        {buffer && selection.size > 0 && <MoveGizmo selection={selection} buffer={buffer} onStart={onDragStart} onMove={onDragMove} onEnd={onDragEnd} />}
         <RenderSettingsContext.Provider value={settings}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
-          {shownBuffer && bounds && (
+          {display && bounds && (
             <>
               <FitCamera bounds={bounds} />
               <SplatRenderContext>
-                <SplatObject buffer={shownBuffer} />
+                <SplatObject buffer={display} />
               </SplatRenderContext>
             </>
           )}
