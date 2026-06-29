@@ -118,23 +118,21 @@ export default function App() {
         setStatus("fetching manifest…");
         const manifest = await getDeltaManifest(host, runId);
         const limit = Math.min(manifest.frames.length, parseInt(maxFrames) || manifest.frames.length);
+        // Load all frames, then render once (the splat renderer doesn't settle
+        // under repeated mid-load buffer swaps). Status shows progress meanwhile.
         const packs: Uint32Array[] = [];
-        // Refresh a bounded number of times (each refresh rebuilds splat
-        // textures). pack/unzip are synchronous, so we must yield after each
-        // push or the rAF render loop never runs and nothing appears.
-        const updateEvery = Math.max(1, Math.floor(limit / 12));
         for (let i = 0; i < limit; i++) {
           const f = manifest.frames[i];
           packs.push(npzToPacked(await unzipNpz(await getAddedNpz(host, runId, f.frame_index))));
-          if ((i + 1) % updateEvery === 0 || i === limit - 1) {
-            const merged = concatU32(packs);
-            setBuffer(merged);
-            setBounds(computeBounds(merged));
-            setStatus(`streaming ${i + 1}/${limit} — ${merged.length / 8} gaussians`);
-            // yield ~2 frames so React commits and the splat renderer actually paints
-            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+          if (i % 5 === 0 || i === limit - 1) {
+            setStatus(`loading ${i + 1}/${limit} frames…`);
+            await new Promise((r) => setTimeout(r, 0)); // keep status/UI responsive
           }
         }
+        const merged = concatU32(packs);
+        setBuffer(merged);
+        setBounds(computeBounds(merged));
+        setStatus(`done: ${merged.length / 8} gaussians`);
       }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
@@ -180,7 +178,7 @@ export default function App() {
         {buffer && bounds && (
           <>
             <FitCamera bounds={bounds} />
-            <SplatRenderContext key={buffer.length}>
+            <SplatRenderContext>
               <SplatObject buffer={buffer} />
             </SplatRenderContext>
           </>
