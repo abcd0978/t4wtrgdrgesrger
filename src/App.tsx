@@ -246,9 +246,10 @@ export default function App() {
   const [drag, setDrag] = React.useState<DragRect | null>(null);
   const [selecting, setSelecting] = React.useState(false);
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
+  const [gizmoDragging, setGizmoDragging] = React.useState(false);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
-  const dragWork = React.useRef<Uint32Array | null>(null);
+  const dragWork = React.useRef<{ color: Uint32Array; shown: Uint32Array } | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
   const selectionRef = React.useRef<Set<number>>(selection);
   bufferRef.current = buffer;
@@ -305,25 +306,32 @@ export default function App() {
   function onDragStart() {
     if (!buffer) return;
     setUndoStack((s) => [...s.slice(-29), buffer]); // keep last 30 states
-    dragWork.current = buffer.slice();
-    setLiveBuffer(dragWork.current.subarray());
+    setGizmoDragging(true);
+    // color = for commit (original colors); shown = for render (orange highlight)
+    const color = buffer.slice();
+    const shown = (shownBuffer ?? buffer).slice();
+    dragWork.current = { color, shown };
+    setLiveBuffer(shown.subarray());
   }
   function onDragMove(dx: number, dy: number, dz: number) {
     const w = dragWork.current;
     if (!w) return;
-    const dv = new DataView(w.buffer);
-    for (const i of selection) {
-      dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
-      dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
-      dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
+    for (const buf of [w.color, w.shown]) {
+      const dv = new DataView(buf.buffer);
+      for (const i of selection) {
+        dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
+        dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
+        dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
+      }
     }
-    setLiveBuffer(w.subarray()); // fresh ref, same data -> live in-place update
+    setLiveBuffer(w.shown.subarray()); // fresh ref, same data -> live in-place update
   }
   function onDragEnd() {
     const w = dragWork.current;
     if (!w) return;
-    setBuffer(w); setBounds(computeBounds(w));
+    setBuffer(w.color); setBounds(computeBounds(w.color));
     setLiveBuffer(null); dragWork.current = null;
+    setGizmoDragging(false);
   }
 
   function undo() {
@@ -409,7 +417,7 @@ export default function App() {
 
       <Canvas dpr={dpr} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
-        <OrbitControls makeDefault enabled={!selecting} />
+        <OrbitControls makeDefault enabled={!selecting && !gizmoDragging} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && selection.size > 0 && <MoveGizmo selection={selection} buffer={buffer} onStart={onDragStart} onMove={onDragMove} onEnd={onDragEnd} />}
