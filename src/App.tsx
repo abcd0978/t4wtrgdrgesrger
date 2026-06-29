@@ -9,14 +9,6 @@ import { RenderSettings, DEFAULT_SETTINGS, RenderSettingsContext } from "./Rende
 
 interface Bounds { min: [number, number, number]; max: [number, number, number]; }
 
-function concatU32(parts: Uint32Array[]): Uint32Array {
-  const total = parts.reduce((a, b) => a + b.length, 0);
-  const out = new Uint32Array(total);
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
-  return out;
-}
-
 function computeBounds(buffer: Uint32Array): Bounds {
   const n = buffer.length / 8;
   const dv = new DataView(buffer.buffer);
@@ -24,12 +16,14 @@ function computeBounds(buffer: Uint32Array): Bounds {
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < n; i++) {
     const b = i * 32;
+    if (dv.getUint8(b + 31) === 0) continue; // skip empty (alpha 0) slots
     for (let k = 0; k < 3; k++) {
       const v = dv.getFloat32(b + k * 4, true);
       if (v < min[k]) min[k] = v;
       if (v > max[k]) max[k] = v;
     }
   }
+  if (!isFinite(min[0])) return { min: [0, 0, 0], max: [1, 1, 1] };
   return { min, max };
 }
 
@@ -86,6 +80,16 @@ function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts }) {
   );
 }
 
+interface CamView { camera: THREE.Camera; width: number; height: number; }
+
+/** Expose the live camera + viewport to App (for screen-space selection). */
+function CaptureCamera({ camRef }: { camRef: React.MutableRefObject<CamView | null> }) {
+  const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
+  camRef.current = { camera, width: size.width, height: size.height };
+  return null;
+}
+
 function NumSlider({
   label, k, min, max, step, settings, setSettings,
 }: {
@@ -125,6 +129,12 @@ export default function App() {
   const [dpr, setDpr] = React.useState(1.5);
   const [showAxes, setShowAxes] = React.useState(false);
 
+  // selection
+  const [selectMode, setSelectMode] = React.useState(false);
+  const [selection, setSelection] = React.useState<Set<number>>(new Set());
+  const [drag, setDrag] = React.useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const camRef = React.useRef<CamView | null>(null);
+
   React.useEffect(() => {
     getRuns(host).then(setRuns).catch(() => setRuns([]));
   }, [host]);
@@ -133,6 +143,7 @@ export default function App() {
     setBusy(true);
     setBuffer(null);
     setBounds(null);
+    setSelection(new Set());
     try {
       if (mode === "snapshot") {
         setStatus("fetching snapshot…");
@@ -170,6 +181,41 @@ export default function App() {
     }
   }
 
+  // Highlight selected gaussians (orange) by patching rgb in a copy of the buffer.
+  const shownBuffer = React.useMemo(() => {
+    if (!buffer || selection.size === 0) return buffer;
+    const hb = buffer.slice();
+    const dv = new DataView(hb.buffer);
+    for (const i of selection) {
+      dv.setUint8(i * 32 + 28, 255);
+      dv.setUint8(i * 32 + 29, 90);
+      dv.setUint8(i * 32 + 30, 0);
+    }
+    return hb;
+  }, [buffer, selection]);
+
+  function selectInBox(x0: number, y0: number, x1: number, y1: number, additive: boolean) {
+    if (!buffer || !camRef.current) return;
+    const { camera, width, height } = camRef.current;
+    const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+    const dv = new DataView(buffer.buffer);
+    const n = buffer.length / 8;
+    const v = new THREE.Vector3();
+    const sel = additive ? new Set(selection) : new Set<number>();
+    for (let i = 0; i < n; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue; // empty slot
+      v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+      v.project(camera);
+      if (v.z < -1 || v.z > 1) continue; // outside frustum depth
+      const sx = (v.x * 0.5 + 0.5) * width;
+      const sy = (-v.y * 0.5 + 0.5) * height;
+      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) sel.add(i);
+    }
+    setSelection(sel);
+  }
+
   const inputStyle: React.CSSProperties = { padding: 4 };
 
   return (
@@ -177,13 +223,13 @@ export default function App() {
       {/* top bar */}
       <div
         style={{
-          position: "absolute", zIndex: 1, top: 0, left: 0, right: 0,
+          position: "absolute", zIndex: 3, top: 0, left: 0, right: 0,
           display: "flex", gap: 6, padding: 8, alignItems: "center", flexWrap: "wrap",
           background: "rgba(0,0,0,0.65)", color: "#fff", font: "13px monospace",
         }}
       >
-        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ ...inputStyle, flex: 1, minWidth: 120 }} />
-        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 170 }}>
+        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ ...inputStyle, flex: 1, minWidth: 110 }} />
+        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 160 }}>
           {runs.length === 0 && <option value={runId}>{runId}</option>}
           {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
         </select>
@@ -193,15 +239,19 @@ export default function App() {
         </select>
         {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ ...inputStyle, width: 55 }} />}
         <button onClick={load} disabled={busy} style={{ padding: "4px 12px" }}>{busy ? "…" : "Load"}</button>
+        <label style={{ display: "flex", alignItems: "center", gap: 3 }} title="drag a box to select; shift = add">
+          <input type="checkbox" checked={selectMode} onChange={(e) => setSelectMode(e.target.checked)} />select
+        </label>
+        {selection.size > 0 && <button onClick={() => setSelection(new Set())} style={{ padding: "4px 8px" }}>clear ({selection.size})</button>}
         <button onClick={() => setShowPanel((v) => !v)} style={{ padding: "4px 10px" }}>⚙</button>
-        <span style={{ flex: 2, minWidth: 110 }}>{status}</span>
+        <span style={{ flex: 2, minWidth: 90 }}>{status}</span>
       </div>
 
       {/* advanced settings panel */}
       {showPanel && (
         <div
           style={{
-            position: "absolute", zIndex: 1, top: 46, right: 8, width: 280,
+            position: "absolute", zIndex: 3, top: 46, right: 8, width: 280,
             display: "flex", flexDirection: "column", gap: 6, padding: 10,
             background: "rgba(0,0,0,0.78)", color: "#fff", font: "12px monospace", borderRadius: 6,
             maxHeight: "85vh", overflowY: "auto",
@@ -246,21 +296,43 @@ export default function App() {
             <input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)
           </label>
 
-          <button onClick={() => { setSettings(DEFAULT_SETTINGS); }} style={{ padding: "4px 8px", marginTop: 4 }}>reset shader</button>
+          <button onClick={() => setSettings(DEFAULT_SETTINGS)} style={{ padding: "4px 8px", marginTop: 4 }}>reset shader</button>
+        </div>
+      )}
+
+      {/* selection drag overlay (above canvas, below top bar) */}
+      {selectMode && (
+        <div
+          style={{ position: "absolute", inset: 0, zIndex: 2, cursor: "crosshair" }}
+          onPointerDown={(e) => setDrag({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY })}
+          onPointerMove={(e) => setDrag((d) => (d ? { ...d, x1: e.clientX, y1: e.clientY } : d))}
+          onPointerUp={(e) => { if (drag) { selectInBox(drag.x0, drag.y0, e.clientX, e.clientY, e.shiftKey); setDrag(null); } }}
+        >
+          {drag && (
+            <div
+              style={{
+                position: "absolute",
+                left: Math.min(drag.x0, drag.x1), top: Math.min(drag.y0, drag.y1),
+                width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0),
+                border: "1px solid #ff8800", background: "rgba(255,136,0,0.15)",
+              }}
+            />
+          )}
         </div>
       )}
 
       <Canvas dpr={dpr} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
-        <OrbitControls makeDefault />
+        <OrbitControls makeDefault enabled={!selectMode} />
+        <CaptureCamera camRef={camRef} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         <RenderSettingsContext.Provider value={settings}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
-          {buffer && bounds && (
+          {shownBuffer && bounds && (
             <>
               <FitCamera bounds={bounds} />
               <SplatRenderContext>
-                <SplatObject buffer={buffer} />
+                <SplatObject buffer={shownBuffer} />
               </SplatRenderContext>
             </>
           )}
