@@ -67,6 +67,7 @@ export function InputController({
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
+  const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
   const env = React.useRef({ camera, w: size.width, h: size.height });
   env.current = { camera, w: size.width, h: size.height };
 
@@ -109,10 +110,11 @@ export function InputController({
     const down = (e: PointerEvent) => {
       const now = performance.now();
       if (now - lastUp < 300 && Math.hypot(e.clientX - lx, e.clientY - ly) < 12) {
+        // double-click: start box select, lock the camera directly
         sel = true; sx = e.clientX; sy = e.clientY;
+        if (controls) controls.enabled = false;
         setSelecting(true);
         setDrag({ x0: sx, y0: sy, x1: sx, y1: sy });
-        e.stopPropagation(); e.preventDefault();
       }
     };
     const move = (e: PointerEvent) => { if (sel) setDrag({ x0: sx, y0: sy, x1: e.clientX, y1: e.clientY }); };
@@ -120,19 +122,20 @@ export function InputController({
       if (sel) {
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
         pick(sx, sy, e.clientX, e.clientY, e.shiftKey, dist < 5);
-        sel = false; setSelecting(false); setDrag(null);
+        sel = false; if (controls) controls.enabled = true; setSelecting(false); setDrag(null);
       }
       lastUp = performance.now(); lx = e.clientX; ly = e.clientY;
     };
-    el.addEventListener("pointerdown", down, true);
+    // NOTE: bubble phase (not capture) so the gizmo/orbit get pointerdown first.
+    el.addEventListener("pointerdown", down);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => {
-      el.removeEventListener("pointerdown", down, true);
+      el.removeEventListener("pointerdown", down);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [gl, bufferRef, selectionRef, setSelection, setDrag, setSelecting]);
+  }, [gl, controls, bufferRef, selectionRef, setSelection, setDrag, setSelecting]);
   return null;
 }
 
