@@ -118,21 +118,28 @@ export default function App() {
         setStatus("fetching manifest…");
         const manifest = await getDeltaManifest(host, runId);
         const limit = Math.min(manifest.frames.length, parseInt(maxFrames) || manifest.frames.length);
-        // Load all frames, then render once (the splat renderer doesn't settle
-        // under repeated mid-load buffer swaps). Status shows progress meanwhile.
-        const packs: Uint32Array[] = [];
+        // Pre-allocate the final buffer (viser-style) and fill in place so the
+        // size never changes mid-load. Empty slots stay 0 (alpha 0 -> culled),
+        // so the renderer streams via its in-place texture update instead of
+        // rebuilding on every growth (which didn't settle = blank screen).
+        const total = manifest.frames[limit - 1]?.cumulative_gaussian_count ?? 0;
+        const capacity = new Uint32Array(total * 8);
+        let offset = 0;
+        const updateEvery = Math.max(1, Math.floor(limit / 20));
         for (let i = 0; i < limit; i++) {
           const f = manifest.frames[i];
-          packs.push(npzToPacked(await unzipNpz(await getAddedNpz(host, runId, f.frame_index))));
-          if (i % 5 === 0 || i === limit - 1) {
-            setStatus(`loading ${i + 1}/${limit} frames…`);
-            await new Promise((r) => setTimeout(r, 0)); // keep status/UI responsive
+          const p = npzToPacked(await unzipNpz(await getAddedNpz(host, runId, f.frame_index)));
+          if (offset + p.length <= capacity.length) {
+            capacity.set(p, offset);
+            offset += p.length;
+          }
+          if ((i + 1) % updateEvery === 0 || i === limit - 1) {
+            setBuffer(capacity.subarray()); // fixed size, fresh ref -> in-place update
+            setBounds(computeBounds(capacity.subarray(0, offset)));
+            setStatus(`streaming ${i + 1}/${limit} — ${offset / 8} gaussians`);
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
           }
         }
-        const merged = concatU32(packs);
-        setBuffer(merged);
-        setBounds(computeBounds(merged));
-        setStatus(`done: ${merged.length / 8} gaussians`);
       }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
