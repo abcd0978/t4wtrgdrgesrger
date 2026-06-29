@@ -102,6 +102,7 @@ export default function App() {
 
   function onDragStart() {
     if (!buffer) return;
+    setStatus("🟢 gizmo grabbed (onMouseDown)");
     setUndoStack((s) => [...s.slice(-29), buffer]);
     const color = buffer.slice();
     const shown = (shownBuffer ?? buffer).slice();
@@ -120,6 +121,7 @@ export default function App() {
       }
     }
     setLiveBuffer(w.shown.subarray());
+    setStatus("🟡 gizmo moving (onObjectChange)");
   }
   function onDragEnd() {
     const w = dragWork.current;
