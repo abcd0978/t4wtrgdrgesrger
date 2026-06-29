@@ -30,3 +30,30 @@ export async function getAddedNpz(host: string, runId: string, frameIndex: numbe
   if (!r.ok) throw new Error(`delta ${frameIndex}: ${r.status}`);
   return r.arrayBuffer();
 }
+
+/** Full snapshot: every Gaussian in one npz (works for runs without deltas). */
+export async function getSnapshot(host: string, runId: string): Promise<ArrayBuffer> {
+  const url = join(host, `api/runs/${encodeURIComponent(runId)}/gaussians/snapshot`);
+  const r = await fetch(url, { headers: { Accept: "application/octet-stream" } });
+  if (!r.ok) throw new Error(`snapshot ${r.status}`);
+  return r.arrayBuffer();
+}
+
+export interface RunInfo {
+  runId: string;
+  gaussians: number;
+  frames: number;
+}
+
+/** List runs for the dropdown. */
+export async function getRuns(host: string): Promise<RunInfo[]> {
+  const url = join(host, "api/runs");
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error(`runs ${r.status}`);
+  const d = await r.json();
+  return (d.runs ?? []).map((x: Record<string, any>) => ({
+    runId: x.run_id,
+    gaussians: x.summary?.total_gaussian_count ?? 0,
+    frames: x.summary?.processed_frame_count ?? 0,
+  }));
+}
