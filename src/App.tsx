@@ -5,6 +5,7 @@ import { OrbitControls } from "@react-three/drei";
 import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
+import { RenderSettings, DEFAULT_SETTINGS, RenderSettingsContext } from "./RenderSettings";
 
 interface Bounds { min: [number, number, number]; max: [number, number, number]; }
 
@@ -37,7 +38,6 @@ const center = (b: Bounds): [number, number, number] =>
 const radius = (b: Bounds): number =>
   Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2], 1) * 0.5;
 
-/** Frame the camera (z-up, like viser). */
 function FitCamera({ bounds }: { bounds: Bounds }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as
@@ -45,12 +45,11 @@ function FitCamera({ bounds }: { bounds: Bounds }) {
     | null;
   const fitted = React.useRef(false);
   React.useEffect(() => {
-    if (fitted.current) return; // fit once per load (don't fight the user / streaming bounds)
+    if (fitted.current) return;
     fitted.current = true;
     const c = center(bounds), r = radius(bounds), d = r * 2.5 + 1;
     camera.up.set(0, 0, 1);
     camera.position.set(c[0] + d, c[1] - d, c[2] + d);
-    // Generous near/far so splats don't clip when zoomed out.
     camera.near = Math.max(r * 0.001, 0.001);
     camera.far = r * 5000 + 1000;
     camera.updateProjectionMatrix();
@@ -60,29 +59,49 @@ function FitCamera({ bounds }: { bounds: Bounds }) {
   return null;
 }
 
-/** Dashed grid on the z=min plane (xy floor), viser-style z-up. */
-function DashedGrid({ bounds }: { bounds: Bounds }) {
+interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
+
+function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts }) {
   const ref = React.useRef<THREE.LineSegments>(null);
   const geo = React.useMemo(() => {
     const c = center(bounds);
     const z = bounds.min[2];
     const span = Math.max(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], 1) * 1.6;
-    const div = 20, step = span / div, half = span / 2;
+    const div = Math.max(2, Math.round(opts.divisions)), step = span / div, half = span / 2;
     const pts: number[] = [];
     for (let i = 0; i <= div; i++) {
       const o = -half + i * step;
-      pts.push(c[0] + o, c[1] - half, z, c[0] + o, c[1] + half, z); // lines along Y
-      pts.push(c[0] - half, c[1] + o, z, c[0] + half, c[1] + o, z); // lines along X
+      pts.push(c[0] + o, c[1] - half, z, c[0] + o, c[1] + half, z);
+      pts.push(c[0] - half, c[1] + o, z, c[0] + half, c[1] + o, z);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
     return g;
-  }, [bounds]);
+  }, [bounds, opts.divisions]);
   React.useEffect(() => { ref.current?.computeLineDistances(); }, [geo]);
   return (
     <lineSegments ref={ref} geometry={geo}>
-      <lineDashedMaterial color="#999999" dashSize={0.25} gapSize={0.18} transparent opacity={0.7} />
+      <lineDashedMaterial color={opts.color} dashSize={opts.dashSize} gapSize={opts.gapSize} transparent opacity={0.7} />
     </lineSegments>
+  );
+}
+
+function NumSlider({
+  label, k, min, max, step, settings, setSettings,
+}: {
+  label: string; k: keyof RenderSettings; min: number; max: number; step: number;
+  settings: RenderSettings; setSettings: React.Dispatch<React.SetStateAction<RenderSettings>>;
+}) {
+  return (
+    <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+      <span style={{ width: 84 }}>{label}</span>
+      <input
+        type="range" min={min} max={max} step={step} value={settings[k]}
+        onChange={(e) => setSettings((s) => ({ ...s, [k]: parseFloat(e.target.value) }))}
+        style={{ flex: 1 }}
+      />
+      <span style={{ width: 46, textAlign: "right" }}>{settings[k]}</span>
+    </label>
   );
 }
 
@@ -92,13 +111,20 @@ export default function App() {
   const [runs, setRuns] = React.useState<RunInfo[]>([]);
   const [mode, setMode] = React.useState<"snapshot" | "delta">("snapshot");
   const [maxFrames, setMaxFrames] = React.useState("100");
-  const [showGrid, setShowGrid] = React.useState(true);
   const [buffer, setBuffer] = React.useState<Uint32Array | null>(null);
   const [bounds, setBounds] = React.useState<Bounds | null>(null);
   const [status, setStatus] = React.useState("idle");
   const [busy, setBusy] = React.useState(false);
 
-  // Populate the run dropdown (on mount / host change).
+  // render settings (shader uniforms) + scene options
+  const [settings, setSettings] = React.useState<RenderSettings>(DEFAULT_SETTINGS);
+  const [showPanel, setShowPanel] = React.useState(false);
+  const [bg, setBg] = React.useState("#ffffff");
+  const [showGrid, setShowGrid] = React.useState(true);
+  const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
+  const [dpr, setDpr] = React.useState(1.5);
+  const [showAxes, setShowAxes] = React.useState(false);
+
   React.useEffect(() => {
     getRuns(host).then(setRuns).catch(() => setRuns([]));
   }, [host]);
@@ -118,10 +144,6 @@ export default function App() {
         setStatus("fetching manifest…");
         const manifest = await getDeltaManifest(host, runId);
         const limit = Math.min(manifest.frames.length, parseInt(maxFrames) || manifest.frames.length);
-        // Pre-allocate the final buffer (viser-style) and fill in place so the
-        // size never changes mid-load. Empty slots stay 0 (alpha 0 -> culled),
-        // so the renderer streams via its in-place texture update instead of
-        // rebuilding on every growth (which didn't settle = blank screen).
         const total = manifest.frames[limit - 1]?.cumulative_gaussian_count ?? 0;
         const capacity = new Uint32Array(total * 8);
         let offset = 0;
@@ -134,7 +156,7 @@ export default function App() {
             offset += p.length;
           }
           if ((i + 1) % updateEvery === 0 || i === limit - 1) {
-            setBuffer(capacity.subarray()); // fixed size, fresh ref -> in-place update
+            setBuffer(capacity.subarray());
             setBounds(computeBounds(capacity.subarray(0, offset)));
             setStatus(`streaming ${i + 1}/${limit} — ${offset / 8} gaussians`);
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
@@ -148,8 +170,11 @@ export default function App() {
     }
   }
 
+  const inputStyle: React.CSSProperties = { padding: 4 };
+
   return (
     <div style={{ position: "fixed", inset: 0 }}>
+      {/* top bar */}
       <div
         style={{
           position: "absolute", zIndex: 1, top: 0, left: 0, right: 0,
@@ -157,39 +182,89 @@ export default function App() {
           background: "rgba(0,0,0,0.65)", color: "#fff", font: "13px monospace",
         }}
       >
-        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ flex: 1, minWidth: 130, padding: 4 }} />
-        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ flex: 2, minWidth: 180, padding: 4 }}>
+        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ ...inputStyle, flex: 1, minWidth: 120 }} />
+        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 170 }}>
           {runs.length === 0 && <option value={runId}>{runId}</option>}
-          {runs.map((r) => (
-            <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>
-          ))}
+          {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
         </select>
-        <select value={mode} onChange={(e) => setMode(e.target.value as "snapshot" | "delta")} style={{ padding: 4 }}>
+        <select value={mode} onChange={(e) => setMode(e.target.value as "snapshot" | "delta")} style={inputStyle}>
           <option value="snapshot">snapshot</option>
           <option value="delta">delta</option>
         </select>
-        {mode === "delta" && (
-          <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ width: 55, padding: 4 }} />
-        )}
-        <label style={{ display: "flex", alignItems: "center", gap: 3 }}>
-          <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />grid
-        </label>
+        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ ...inputStyle, width: 55 }} />}
         <button onClick={load} disabled={busy} style={{ padding: "4px 12px" }}>{busy ? "…" : "Load"}</button>
-        <span style={{ flex: 2, minWidth: 120 }}>{status}</span>
+        <button onClick={() => setShowPanel((v) => !v)} style={{ padding: "4px 10px" }}>⚙</button>
+        <span style={{ flex: 2, minWidth: 110 }}>{status}</span>
       </div>
 
-      <Canvas camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
-        <color attach="background" args={["#ffffff"]} />
+      {/* advanced settings panel */}
+      {showPanel && (
+        <div
+          style={{
+            position: "absolute", zIndex: 1, top: 46, right: 8, width: 280,
+            display: "flex", flexDirection: "column", gap: 6, padding: 10,
+            background: "rgba(0,0,0,0.78)", color: "#fff", font: "12px monospace", borderRadius: 6,
+            maxHeight: "85vh", overflowY: "auto",
+          }}
+        >
+          <b>shader</b>
+          <NumSlider label="splat size" k="splatScale" min={0.1} max={5} step={0.1} settings={settings} setSettings={setSettings} />
+          <NumSlider label="min px" k="minSplatPx" min={0} max={20} step={0.5} settings={settings} setSettings={setSettings} />
+          <NumSlider label="max px" k="maxSplatPx" min={16} max={2048} step={16} settings={settings} setSettings={setSettings} />
+          <NumSlider label="blur" k="blur" min={0} max={2} step={0.05} settings={settings} setSettings={setSettings} />
+          <NumSlider label="opacity" k="opacityScale" min={0} max={3} step={0.05} settings={settings} setSettings={setSettings} />
+          <NumSlider label="cull" k="cullThreshold" min={0} max={1} step={0.01} settings={settings} setSettings={setSettings} />
+          <NumSlider label="falloff" k="falloffCutoff" min={1} max={9} step={0.25} settings={settings} setSettings={setSettings} />
+          <NumSlider label="alphaTest" k="alphaTest" min={0} max={0.5} step={0.01} settings={settings} setSettings={setSettings} />
+          <NumSlider label="fade" k="fadeSpeed" min={0.1} max={10} step={0.1} settings={settings} setSettings={setSettings} />
+
+          <b>scene</b>
+          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ width: 84 }}>background</span>
+            <input type="color" value={bg} onChange={(e) => setBg(e.target.value)} />
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} /> grid
+            <input type="color" value={grid.color} onChange={(e) => setGrid((g) => ({ ...g, color: e.target.value }))} />
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+            <span style={{ width: 84 }}>grid div</span>
+            <input type="range" min={2} max={60} step={1} value={grid.divisions} onChange={(e) => setGrid((g) => ({ ...g, divisions: parseInt(e.target.value) }))} style={{ flex: 1 }} />
+            <span style={{ width: 46, textAlign: "right" }}>{grid.divisions}</span>
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+            <span style={{ width: 84 }}>dash/gap</span>
+            <input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} />
+            <input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} />
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+            <span style={{ width: 84 }}>DPR</span>
+            <input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} />
+            <span style={{ width: 46, textAlign: "right" }}>{dpr}</span>
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)
+          </label>
+
+          <button onClick={() => { setSettings(DEFAULT_SETTINGS); }} style={{ padding: "4px 8px", marginTop: 4 }}>reset shader</button>
+        </div>
+      )}
+
+      <Canvas dpr={dpr} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+        <color attach="background" args={[bg]} />
         <OrbitControls makeDefault />
-        {showGrid && bounds && <DashedGrid bounds={bounds} />}
-        {buffer && bounds && (
-          <>
-            <FitCamera bounds={bounds} />
-            <SplatRenderContext>
-              <SplatObject buffer={buffer} />
-            </SplatRenderContext>
-          </>
-        )}
+        {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
+        <RenderSettingsContext.Provider value={settings}>
+          {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
+          {buffer && bounds && (
+            <>
+              <FitCamera bounds={bounds} />
+              <SplatRenderContext>
+                <SplatObject buffer={buffer} />
+              </SplatRenderContext>
+            </>
+          )}
+        </RenderSettingsContext.Provider>
       </Canvas>
     </div>
   );

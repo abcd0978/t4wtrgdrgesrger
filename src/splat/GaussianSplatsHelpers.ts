@@ -21,6 +21,15 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     fogColor: new THREE.Color(1, 1, 1),
     fogNear: 0.0,
     fogFar: 1000.0,
+    // Tunable render settings (driven from the UI).
+    splatScale: 1.0,
+    minSplatPx: 2.0,
+    maxSplatPx: 1024.0,
+    blur: 0.3,
+    opacityScale: 1.0,
+    cullThreshold: 0.01,
+    falloffCutoff: 4.0,
+    alphaTest: 0.01,
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
   precision mediump float;
@@ -45,6 +54,14 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
 
   // Fade in state between [0, 1].
   uniform float transitionInState;
+
+  // Tunable render settings.
+  uniform float splatScale;
+  uniform float minSplatPx;
+  uniform float maxSplatPx;
+  uniform float blur;
+  uniform float opacityScale;
+  uniform float cullThreshold;
 
   out vec4 vRgba;
   out vec2 vPosition;
@@ -126,9 +143,9 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     );
     mat3 A = J * mat3(T_camera_group);
     mat3 cov_proj = A * cov3d * transpose(A);
-    float diag1 = cov_proj[0][0] + 0.3;
+    float diag1 = cov_proj[0][0] + blur;
     float offDiag = cov_proj[0][1];
-    float diag2 = cov_proj[1][1] + 0.3;
+    float diag2 = cov_proj[1][1] + blur;
 
     // Eigendecomposition.
     float mid = 0.5 * (diag1 + diag2);
@@ -138,21 +155,19 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     if (lambda2 < 0.0)
       return;
     vec2 diagonalVector = normalize(vec2(offDiag, lambda1 - diag1));
-    // Minimum on-screen size so small/distant Gaussians stay visible (no sub-pixel vanish).
-    float minSplatPx = 2.0;
-    vec2 v1 = clamp(sqrt(2.0 * lambda1), minSplatPx, 1024.0) * diagonalVector;
-    vec2 v2 = clamp(sqrt(2.0 * lambda2), minSplatPx, 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
+    vec2 v1 = clamp(sqrt(2.0 * lambda1) * splatScale, minSplatPx, maxSplatPx) * diagonalVector;
+    vec2 v2 = clamp(sqrt(2.0 * lambda2) * splatScale, minSplatPx, maxSplatPx) * vec2(diagonalVector.y, -diagonalVector.x);
 
     vRgba = vec4(
       float(rgbaUint32 & uint(0xFF)) / 255.0,
       float((rgbaUint32 >> uint(8)) & uint(0xFF)) / 255.0,
       float((rgbaUint32 >> uint(16)) & uint(0xFF)) / 255.0,
-      float(rgbaUint32 >> uint(24)) / 255.0
+      float(rgbaUint32 >> uint(24)) / 255.0 * opacityScale
     );
 
     // Throw the Gaussian off the screen if it's too close, too far, or too small.
     float weightedDeterminant = vRgba.a * (diag1 * diag2 - offDiag * offDiag);
-    if (weightedDeterminant < 0.01)  // lowered from 0.25 so small/distant splats aren't culled
+    if (weightedDeterminant < cullThreshold)
       return;
     vPosition = position.xy;
 
@@ -170,6 +185,8 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
   `precision mediump float;
 
   uniform vec2 viewport;
+  uniform float falloffCutoff;
+  uniform float alphaTest;
 
   in vec4 vRgba;
   in vec2 vPosition;
@@ -178,9 +195,9 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
 
   void main () {
     float A = -dot(vPosition, vPosition);
-    if (A < -4.0) discard;
+    if (A < -falloffCutoff) discard;
     float B = exp(A) * vRgba.a;
-    if (B < 0.01) discard;  // alphaTest.
+    if (B < alphaTest) discard;
     gl_FragColor = vec4(vRgba.rgb, B);
     #include <fog_fragment>
   }`,

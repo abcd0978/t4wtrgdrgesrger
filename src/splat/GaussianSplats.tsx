@@ -45,6 +45,7 @@ import {
   type GaussianMeshProps,
 } from "./GaussianSplatsHelpers";
 import { ViewerContext } from "../ViewerContext";
+import { RenderSettingsContext } from "../RenderSettings";
 
 /**Provider for creating splat rendering context.*/
 export function SplatRenderContext({
@@ -140,6 +141,7 @@ function SplatRenderer() {
 function SplatRendererImpl() {
   const splatContext = React.useContext(GaussianSplatsContext)!;
   const viewer = React.useContext(ViewerContext)!;
+  const settings = React.useContext(RenderSettingsContext);
   const groupBufferFromId = splatContext.gaussianSplatState.store(
     (state) => state.groupBufferFromId,
   );
@@ -562,8 +564,17 @@ function SplatRendererImpl() {
       return;
 
     const uniforms = meshProps.material.uniforms;
+    // Live render settings from the UI.
+    uniforms.splatScale.value = settings.splatScale;
+    uniforms.minSplatPx.value = settings.minSplatPx;
+    uniforms.maxSplatPx.value = settings.maxSplatPx;
+    uniforms.blur.value = settings.blur;
+    uniforms.opacityScale.value = settings.opacityScale;
+    uniforms.cullThreshold.value = settings.cullThreshold;
+    uniforms.falloffCutoff.value = settings.falloffCutoff;
+    uniforms.alphaTest.value = settings.alphaTest;
     uniforms.transitionInState.value = Math.min(
-      uniforms.transitionInState.value + delta * 2.0,
+      uniforms.transitionInState.value + delta * settings.fadeSpeed,
       1.0,
     );
 
