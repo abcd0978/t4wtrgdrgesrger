@@ -10,13 +10,13 @@ import { FitCamera, DashedGrid, InputController, MoveGizmo, type GridOpts, type 
 import { SettingsPanel } from "./components/SettingsPanel";
 
 const HELP = [
-  ["drag", "orbit camera"],
-  ["scroll", "zoom"],
-  ["double-click", "pick a gaussian"],
-  ["dbl-click + drag", "box select (shift: add)"],
-  ["gizmo arrows", "move selection"],
-  ["undo / reset", "revert edits"],
-  ["⚙", "render settings"],
+  ["드래그", "카메라 회전"],
+  ["스크롤", "확대 / 축소"],
+  ["더블클릭", "가우시안 1개 선택"],
+  ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
+  ["기즈모 화살표", "선택한 것 이동"],
+  ["undo / reset", "되돌리기 / 처음으로"],
+  ["⚙ 버튼", "렌더 설정 열기"],
 ];
 
 export default function App() {
@@ -183,16 +183,17 @@ export default function App() {
 
       {showHelp && (
         <div style={{
-          position: "absolute", zIndex: 3, left: 8, bottom: 8, padding: "8px 10px",
-          background: "rgba(0,0,0,0.7)", color: "#fff", font: "12px monospace", borderRadius: 6,
+          position: "absolute", zIndex: 3, left: 12, bottom: 12, padding: "16px 20px",
+          background: "rgba(0,0,0,0.8)", color: "#fff", font: "16px sans-serif", borderRadius: 10,
+          lineHeight: 1.8,
         }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
-            <b>controls</b>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 24, marginBottom: 10, fontSize: 20 }}>
+            <b>📖 사용 방법</b>
             <span style={{ cursor: "pointer", opacity: 0.7 }} onClick={() => setShowHelp(false)}>✕</span>
           </div>
           {HELP.map(([k, v]) => (
-            <div key={k} style={{ display: "flex", gap: 10 }}>
-              <span style={{ width: 110, color: "#ffb060" }}>{k}</span><span>{v}</span>
+            <div key={k} style={{ display: "flex", gap: 16 }}>
+              <span style={{ width: 180, color: "#ffb060", fontWeight: 700 }}>{k}</span><span>{v}</span>
             </div>
           ))}
         </div>
