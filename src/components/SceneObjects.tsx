@@ -140,18 +140,17 @@ export function InputController({
 }
 
 /** Translate gizmo; reports incremental deltas live while dragging.
- * Uses the `dragging-changed` event to lock the orbit camera IMMEDIATELY
- * (a state flag would lag a frame and let the camera eat the first drag). */
+ * drei's TransformControls auto-disables makeDefault OrbitControls during the
+ * drag — so we DON'T pass an `enabled` prop to OrbitControls (that would re-enable
+ * it on every re-render and cancel the drag). */
 export function MoveGizmo({
-  selection, buffer, onStart, onMove, onEnd, setGizmoDragging,
+  selection, buffer, onStart, onMove, onEnd,
 }: {
   selection: Set<number>; buffer: Uint32Array | null;
   onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void;
-  setGizmoDragging: (b: boolean) => void;
 }) {
   const gref = React.useRef<THREE.Group>(null);
   const last = React.useRef(new THREE.Vector3());
-  const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
 
   React.useEffect(() => {
     if (gref.current && buffer && selection.size > 0) {
@@ -166,8 +165,6 @@ export function MoveGizmo({
     <TransformControls
       mode="translate"
       onMouseDown={() => {
-        if (controls) controls.enabled = false; // lock camera immediately, this frame
-        setGizmoDragging(true);
         if (gref.current) last.current.copy(gref.current.position);
         onStart();
       }}
@@ -177,11 +174,7 @@ export function MoveGizmo({
         const dx = p.x - last.current.x, dy = p.y - last.current.y, dz = p.z - last.current.z;
         if (dx || dy || dz) { onMove(dx, dy, dz); last.current.copy(p); }
       }}
-      onMouseUp={() => {
-        if (controls) controls.enabled = true;
-        setGizmoDragging(false);
-        onEnd();
-      }}
+      onMouseUp={() => onEnd()}
     >
       <group ref={gref}>
         {/* invisible anchor so TransformControls has a real object to attach to */}

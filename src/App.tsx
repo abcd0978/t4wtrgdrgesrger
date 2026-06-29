@@ -43,7 +43,6 @@ export default function App() {
   const [selection, setSelection] = React.useState<Set<number>>(new Set());
   const [drag, setDrag] = React.useState<DragRect | null>(null);
   const [selecting, setSelecting] = React.useState(false);
-  const [gizmoDragging, setGizmoDragging] = React.useState(false);
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
@@ -212,11 +211,11 @@ export default function App() {
 
       <Canvas dpr={dpr} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
-        <OrbitControls makeDefault enabled={!selecting && !gizmoDragging} />
+        <OrbitControls makeDefault />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && selection.size > 0 && (
-          <MoveGizmo selection={selection} buffer={buffer} onStart={onDragStart} onMove={onDragMove} onEnd={onDragEnd} setGizmoDragging={setGizmoDragging} />
+          <MoveGizmo selection={selection} buffer={buffer} onStart={onDragStart} onMove={onDragMove} onEnd={onDragEnd} />
         )}
         <RenderSettingsContext.Provider value={settings}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
