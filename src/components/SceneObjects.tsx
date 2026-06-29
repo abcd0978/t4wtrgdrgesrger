@@ -146,7 +146,6 @@ export function MoveGizmo({
   onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void;
   setGizmoDragging: (b: boolean) => void;
 }) {
-  const tref = React.useRef<THREE.Object3D & { addEventListener: (t: string, cb: (e: { value: boolean }) => void) => void; removeEventListener: (t: string, cb: (e: { value: boolean }) => void) => void } | null>(null);
   const gref = React.useRef<THREE.Group>(null);
   const last = React.useRef(new THREE.Vector3());
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
@@ -159,29 +158,26 @@ export function MoveGizmo({
     }
   }, [selection, buffer]);
 
-  React.useEffect(() => {
-    const t = tref.current;
-    if (!t) return;
-    const onDc = (e: { value: boolean }) => {
-      if (controls) controls.enabled = !e.value; // free/lock camera right now
-      setGizmoDragging(e.value);
-      if (e.value) { if (gref.current) last.current.copy(gref.current.position); onStart(); }
-      else onEnd();
-    };
-    t.addEventListener("dragging-changed", onDc);
-    return () => t.removeEventListener("dragging-changed", onDc);
-  }, [controls, onStart, onEnd, setGizmoDragging]);
-
   if (!buffer || selection.size === 0) return null;
   return (
     <TransformControls
-      ref={tref as unknown as React.Ref<never>}
       mode="translate"
+      onMouseDown={() => {
+        if (controls) controls.enabled = false; // lock camera immediately, this frame
+        setGizmoDragging(true);
+        if (gref.current) last.current.copy(gref.current.position);
+        onStart();
+      }}
       onObjectChange={() => {
         if (!gref.current) return;
         const p = gref.current.position;
         const dx = p.x - last.current.x, dy = p.y - last.current.y, dz = p.z - last.current.z;
         if (dx || dy || dz) { onMove(dx, dy, dz); last.current.copy(p); }
+      }}
+      onMouseUp={() => {
+        if (controls) controls.enabled = true;
+        setGizmoDragging(false);
+        onEnd();
       }}
     >
       <group ref={gref} />
