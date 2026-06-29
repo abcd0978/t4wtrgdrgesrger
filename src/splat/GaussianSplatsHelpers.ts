@@ -223,8 +223,9 @@ export function createGaussianMeshProps(
   geometry.setAttribute(
     "position",
     new THREE.BufferAttribute(
-      new Float32Array([-2, -2, 2, -2, 2, 2, -2, 2]),
-      2,
+      // 3-component (z=0) so boundingSphere isn't NaN; shader only uses position.xy
+      new Float32Array([-2, -2, 0, 2, -2, 0, 2, 2, 0, -2, 2, 0]),
+      3,
     ),
   );
 

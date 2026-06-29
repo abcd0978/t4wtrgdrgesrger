@@ -1,7 +1,6 @@
 import React from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { TransformControls } from "@react-three/drei";
 import { type Bounds, center, radius, selCenter } from "../lib/bounds";
 
 export interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
@@ -139,50 +138,76 @@ export function InputController({
   return null;
 }
 
-/** Translate gizmo; reports incremental deltas live while dragging.
- * drei's TransformControls auto-disables makeDefault OrbitControls during the
- * drag — so we DON'T pass an `enabled` prop to OrbitControls (that would re-enable
- * it on every re-render and cancel the drag). */
-export function MoveGizmo({
-  selection, buffer, onStart, onMove, onEnd,
+/** Drag handle (sphere) at the selection centroid. Drag = move along the camera
+ * plane. Built directly (raycast -> plane) because TransformControls' translate
+ * is broken in this stack. The handle moves live; gaussians commit on release. */
+export function DragMoveHandle({
+  buffer, selection, onCommit, size,
 }: {
-  selection: Set<number>; buffer: Uint32Array | null;
-  onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void;
+  buffer: Uint32Array | null; selection: Set<number>;
+  onCommit: (dx: number, dy: number, dz: number) => void; size: number;
 }) {
-  const gref = React.useRef<THREE.Group>(null);
-  const last = React.useRef(new THREE.Vector3());
+  const camera = useThree((s) => s.camera);
+  const gl = useThree((s) => s.gl);
+  const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
+  const meshRef = React.useRef<THREE.Mesh>(null);
 
+  const pos = React.useMemo<[number, number, number]>(
+    () => (buffer && selection.size > 0 ? selCenter(buffer, selection) : [0, 0, 0]),
+    [buffer, selection],
+  );
   React.useEffect(() => {
-    if (gref.current && buffer && selection.size > 0) {
-      const c = selCenter(buffer, selection);
-      gref.current.position.set(c[0], c[1], c[2]);
-      last.current.set(c[0], c[1], c[2]);
-    }
-  }, [selection, buffer]);
+    if (meshRef.current) meshRef.current.position.set(pos[0], pos[1], pos[2]);
+  }, [pos]);
 
   if (!buffer || selection.size === 0) return null;
+
+  function startDrag(e: { stopPropagation: () => void }) {
+    e.stopPropagation();
+    if (controls) controls.enabled = false;
+    const plane = new THREE.Plane();
+    const n = new THREE.Vector3();
+    camera.getWorldDirection(n);
+    plane.setFromNormalAndCoplanarPoint(n, meshRef.current!.position.clone());
+    const rect = gl.domElement.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    const hit = new THREE.Vector3();
+    const last = new THREE.Vector3();
+    const total = new THREE.Vector3();
+    let started = false;
+    const castTo = (ev: PointerEvent, out: THREE.Vector3) => {
+      const ndc = new THREE.Vector2(
+        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      ray.setFromCamera(ndc, camera);
+      return ray.ray.intersectPlane(plane, out) !== null;
+    };
+    const onMove = (ev: PointerEvent) => {
+      if (!meshRef.current) return;
+      if (!started) { if (castTo(ev, last)) started = true; return; }
+      if (!castTo(ev, hit)) return;
+      const dx = hit.x - last.x, dy = hit.y - last.y, dz = hit.z - last.z;
+      meshRef.current.position.x += dx;
+      meshRef.current.position.y += dy;
+      meshRef.current.position.z += dz;
+      total.x += dx; total.y += dy; total.z += dz;
+      last.copy(hit);
+    };
+    const onUp = () => {
+      if (controls) controls.enabled = true;
+      onCommit(total.x, total.y, total.z);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   return (
-    <TransformControls
-      mode="translate"
-      onMouseDown={() => {
-        if (gref.current) last.current.copy(gref.current.position);
-        onStart();
-      }}
-      onObjectChange={() => {
-        if (!gref.current) return;
-        const p = gref.current.position;
-        const dx = p.x - last.current.x, dy = p.y - last.current.y, dz = p.z - last.current.z;
-        if (dx || dy || dz) { onMove(dx, dy, dz); last.current.copy(p); }
-      }}
-      onMouseUp={() => onEnd()}
-    >
-      <group ref={gref}>
-        {/* invisible anchor so TransformControls has a real object to attach to */}
-        <mesh visible={false}>
-          <boxGeometry args={[0.01, 0.01, 0.01]} />
-          <meshBasicMaterial />
-        </mesh>
-      </group>
-    </TransformControls>
+    <mesh ref={meshRef} position={pos} onPointerDown={startDrag} renderOrder={20000}>
+      <sphereGeometry args={[size, 16, 16]} />
+      <meshBasicMaterial color="#ff8800" depthTest={false} transparent opacity={0.85} />
+    </mesh>
   );
 }

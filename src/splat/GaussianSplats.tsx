@@ -593,6 +593,7 @@ function SplatRendererImpl() {
       geometry={meshProps.geometry}
       material={meshProps.material}
       renderOrder={10000.0 /*Generally, we want to render last.*/}
+      frustumCulled={false /* 2D quad position -> NaN boundingSphere; splats always drawn */}
     />
   );
 }

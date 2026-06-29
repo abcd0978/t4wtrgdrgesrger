@@ -6,7 +6,7 @@ import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } fro
 import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, radius } from "./lib/bounds";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, DashedGrid, InputController, MoveGizmo, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, DashedGrid, InputController, DragMoveHandle, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 
 const HELP = [
@@ -46,6 +46,7 @@ export default function App() {
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
+  const [moveStep, setMoveStep] = React.useState(0.05);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
   const dragWork = React.useRef<{ color: Uint32Array; snap: Uint32Array } | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
@@ -100,30 +101,22 @@ export default function App() {
     return hb;
   }, [buffer, selection]);
 
-  function onDragStart() {
-    if (!buffer) return;
-    // No setState during the drag — a re-render re-uploads the splat texture and
-    // cancels the TransformControls drag. Stage edits in a ref, commit on release.
-    dragWork.current = { color: buffer.slice(), snap: buffer };
-  }
-  function onDragMove(dx: number, dy: number, dz: number) {
-    const w = dragWork.current;
-    if (!w) return;
-    const dv = new DataView(w.color.buffer);
+  // Apply the gizmo's net move on release (delta = end - start). Only touch the
+  // buffer / remount when something actually moved, so plain clicks are free.
+  function moveSelection(dx: number, dy: number, dz: number) {
+    if (!buffer || selection.size === 0 || (!dx && !dy && !dz)) return;
+    setUndoStack((s) => [...s.slice(-29), buffer]);
+    const nb = buffer.slice();
+    const dv = new DataView(nb.buffer);
     for (const i of selection) {
       dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
       dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
       dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
     }
-  }
-  function onDragEnd() {
-    const w = dragWork.current;
-    if (!w) return;
-    setUndoStack((s) => [...s.slice(-29), w.snap]);
-    setBuffer(w.color); setBounds(computeBounds(w.color));
+    // new ref, same size -> renderer updates the texture in place (no remount, no
+    // bounds re-scan): keeps moves snappy.
+    setBuffer(nb);
     setStatus(`moved ${selection.size} gaussians`);
-    setSplatKey((k) => k + 1); // remount renderer so the moved buffer is re-uploaded
-    dragWork.current = null;
   }
 
   function undo() {
@@ -199,6 +192,27 @@ export default function App() {
         </div>
       )}
 
+      {selection.size > 0 && (
+        <div style={{
+          position: "absolute", zIndex: 3, top: 50, left: 8, padding: 12,
+          background: "rgba(0,0,0,0.82)", color: "#fff", font: "14px monospace", borderRadius: 8,
+          display: "flex", flexDirection: "column", gap: 8, width: 190,
+        }}>
+          <div><b>선택 {selection.size}개 이동</b></div>
+          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>step
+            <input type="range" min={0.01} max={1} step={0.01} value={moveStep} onChange={(e) => setMoveStep(parseFloat(e.target.value))} style={{ flex: 1 }} />
+            <span style={{ width: 38, textAlign: "right" }}>{moveStep}</span>
+          </label>
+          {([["X", 0], ["Y", 1], ["Z", 2]] as const).map(([ax, i]) => (
+            <div key={ax} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ width: 14 }}>{ax}</span>
+              <button style={{ flex: 1, padding: 6 }} onClick={() => moveSelection(i === 0 ? -moveStep : 0, i === 1 ? -moveStep : 0, i === 2 ? -moveStep : 0)}>−</button>
+              <button style={{ flex: 1, padding: 6 }} onClick={() => moveSelection(i === 0 ? moveStep : 0, i === 1 ? moveStep : 0, i === 2 ? moveStep : 0)}>＋</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {drag && (
         <div style={{
           position: "absolute", zIndex: 2, pointerEvents: "none",
@@ -213,8 +227,8 @@ export default function App() {
         <OrbitControls makeDefault />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
-        {buffer && selection.size > 0 && (
-          <MoveGizmo selection={selection} buffer={buffer} onStart={onDragStart} onMove={onDragMove} onEnd={onDragEnd} />
+        {buffer && bounds && selection.size > 0 && (
+          <DragMoveHandle buffer={buffer} selection={selection} onCommit={moveSelection} size={radius(bounds) * 0.04} />
         )}
         <RenderSettingsContext.Provider value={settings}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
