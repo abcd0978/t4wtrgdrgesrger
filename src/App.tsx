@@ -46,7 +46,7 @@ export default function App() {
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
-  const dragWork = React.useRef<{ color: Uint32Array; shown: Uint32Array } | null>(null);
+  const dragWork = React.useRef<{ color: Uint32Array; snap: Uint32Array } | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
   const selectionRef = React.useRef<Set<number>>(selection);
   bufferRef.current = buffer;
@@ -101,32 +101,27 @@ export default function App() {
 
   function onDragStart() {
     if (!buffer) return;
-    setStatus("🟢 gizmo grabbed (onMouseDown)");
-    setUndoStack((s) => [...s.slice(-29), buffer]);
-    const color = buffer.slice();
-    const shown = (shownBuffer ?? buffer).slice();
-    dragWork.current = { color, shown };
-    setLiveBuffer(shown.subarray());
+    // No setState during the drag — a re-render re-uploads the splat texture and
+    // cancels the TransformControls drag. Stage edits in a ref, commit on release.
+    dragWork.current = { color: buffer.slice(), snap: buffer };
   }
   function onDragMove(dx: number, dy: number, dz: number) {
     const w = dragWork.current;
     if (!w) return;
-    for (const buf of [w.color, w.shown]) {
-      const dv = new DataView(buf.buffer);
-      for (const i of selection) {
-        dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
-        dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
-        dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
-      }
+    const dv = new DataView(w.color.buffer);
+    for (const i of selection) {
+      dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
+      dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
+      dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
     }
-    setLiveBuffer(w.shown.subarray());
-    setStatus("🟡 gizmo moving (onObjectChange)");
   }
   function onDragEnd() {
     const w = dragWork.current;
     if (!w) return;
+    setUndoStack((s) => [...s.slice(-29), w.snap]);
     setBuffer(w.color); setBounds(computeBounds(w.color));
-    setLiveBuffer(null); dragWork.current = null;
+    setStatus(`moved ${selection.size} gaussians`);
+    dragWork.current = null;
   }
 
   function undo() {
