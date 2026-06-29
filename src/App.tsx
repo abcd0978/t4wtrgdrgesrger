@@ -152,7 +152,7 @@ export default function App() {
       <div style={{
         position: "absolute", zIndex: 3, top: 0, left: 0, right: 0,
         display: "flex", gap: 6, padding: 8, alignItems: "center", flexWrap: "wrap",
-        background: "rgba(0,0,0,0.65)", color: "#fff", font: "13px monospace",
+        background: "rgba(0,0,0,0.65)", color: "#fff", font: "15px monospace",
       }}>
         <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ ...inputStyle, flex: 1, minWidth: 110 }} />
         <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 150 }}>

@@ -180,7 +180,13 @@ export function MoveGizmo({
         onEnd();
       }}
     >
-      <group ref={gref} />
+      <group ref={gref}>
+        {/* invisible anchor so TransformControls has a real object to attach to */}
+        <mesh visible={false}>
+          <boxGeometry args={[0.01, 0.01, 0.01]} />
+          <meshBasicMaterial />
+        </mesh>
+      </group>
     </TransformControls>
   );
 }
