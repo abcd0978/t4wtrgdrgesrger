@@ -43,12 +43,16 @@ function FitCamera({ bounds }: { bounds: Bounds }) {
   const controls = useThree((s) => s.controls) as
     | { target: { set: (x: number, y: number, z: number) => void }; update: () => void }
     | null;
+  const fitted = React.useRef(false);
   React.useEffect(() => {
+    if (fitted.current) return; // fit once per load (don't fight the user / streaming bounds)
+    fitted.current = true;
     const c = center(bounds), r = radius(bounds), d = r * 2.5 + 1;
     camera.up.set(0, 0, 1);
     camera.position.set(c[0] + d, c[1] - d, c[2] + d);
-    camera.near = Math.max(d / 1000, 0.001);
-    camera.far = d * 100;
+    // Generous near/far so splats don't clip when zoomed out.
+    camera.near = Math.max(r * 0.001, 0.001);
+    camera.far = r * 5000 + 1000;
     camera.updateProjectionMatrix();
     if (controls?.target) { controls.target.set(c[0], c[1], c[2]); controls.update(); }
     else camera.lookAt(c[0], c[1], c[2]);
@@ -104,25 +108,29 @@ export default function App() {
     setBuffer(null);
     setBounds(null);
     try {
-      let merged: Uint32Array;
       if (mode === "snapshot") {
         setStatus("fetching snapshot…");
-        merged = npzToPacked(await unzipNpz(await getSnapshot(host, runId)));
+        const merged = npzToPacked(await unzipNpz(await getSnapshot(host, runId)));
+        setBuffer(merged);
+        setBounds(computeBounds(merged));
+        setStatus(`done: ${merged.length / 8} gaussians`);
       } else {
         setStatus("fetching manifest…");
         const manifest = await getDeltaManifest(host, runId);
         const limit = Math.min(manifest.frames.length, parseInt(maxFrames) || manifest.frames.length);
         const packs: Uint32Array[] = [];
+        const BATCH = 5; // push to renderer every few frames so it streams in
         for (let i = 0; i < limit; i++) {
           const f = manifest.frames[i];
           packs.push(npzToPacked(await unzipNpz(await getAddedNpz(host, runId, f.frame_index))));
-          if (i % 5 === 0 || i === limit - 1) setStatus(`frame ${i + 1}/${limit}`);
+          if (i % BATCH === BATCH - 1 || i === limit - 1) {
+            const merged = concatU32(packs);
+            setBuffer(merged);
+            setBounds(computeBounds(merged));
+            setStatus(`streaming ${i + 1}/${limit} — ${merged.length / 8} gaussians`);
+          }
         }
-        merged = concatU32(packs);
       }
-      setBuffer(merged);
-      setBounds(computeBounds(merged));
-      setStatus(`done: ${merged.length / 8} gaussians`);
     } catch (e) {
       setStatus("error: " + (e as Error).message);
     } finally {
