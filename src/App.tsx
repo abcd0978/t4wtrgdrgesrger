@@ -45,6 +45,7 @@ export default function App() {
   const [selecting, setSelecting] = React.useState(false);
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
+  const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
   const originalBuffer = React.useRef<Uint32Array | null>(null);
   const dragWork = React.useRef<{ color: Uint32Array; snap: Uint32Array } | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
@@ -121,6 +122,7 @@ export default function App() {
     setUndoStack((s) => [...s.slice(-29), w.snap]);
     setBuffer(w.color); setBounds(computeBounds(w.color));
     setStatus(`moved ${selection.size} gaussians`);
+    setSplatKey((k) => k + 1); // remount renderer so the moved buffer is re-uploaded
     dragWork.current = null;
   }
 
@@ -129,6 +131,7 @@ export default function App() {
       if (s.length === 0) return s;
       const prev = s[s.length - 1];
       setBuffer(prev); setBounds(computeBounds(prev)); setLiveBuffer(null);
+      setSplatKey((k) => k + 1);
       return s.slice(0, -1);
     });
   }
@@ -138,6 +141,7 @@ export default function App() {
     const copy = ob.slice();
     setBuffer(copy); setBounds(computeBounds(copy));
     setSelection(new Set()); setUndoStack([]); setLiveBuffer(null);
+    setSplatKey((k) => k + 1);
   }
 
   const display = liveBuffer ?? shownBuffer;
@@ -217,7 +221,7 @@ export default function App() {
           {display && bounds && (
             <>
               <FitCamera bounds={bounds} />
-              <SplatRenderContext>
+              <SplatRenderContext key={splatKey}>
                 <SplatObject buffer={display} />
               </SplatRenderContext>
             </>
