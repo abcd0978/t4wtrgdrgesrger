@@ -138,8 +138,10 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     if (lambda2 < 0.0)
       return;
     vec2 diagonalVector = normalize(vec2(offDiag, lambda1 - diag1));
-    vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
-    vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
+    // Minimum on-screen size so small/distant Gaussians stay visible (no sub-pixel vanish).
+    float minSplatPx = 2.0;
+    vec2 v1 = clamp(sqrt(2.0 * lambda1), minSplatPx, 1024.0) * diagonalVector;
+    vec2 v2 = clamp(sqrt(2.0 * lambda2), minSplatPx, 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
 
     vRgba = vec4(
       float(rgbaUint32 & uint(0xFF)) / 255.0,
@@ -150,7 +152,7 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
 
     // Throw the Gaussian off the screen if it's too close, too far, or too small.
     float weightedDeterminant = vRgba.a * (diag1 * diag2 - offDiag * offDiag);
-    if (weightedDeterminant < 0.25)
+    if (weightedDeterminant < 0.01)  // lowered from 0.25 so small/distant splats aren't culled
       return;
     vPosition = position.xy;
 

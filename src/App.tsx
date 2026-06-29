@@ -119,15 +119,19 @@ export default function App() {
         const manifest = await getDeltaManifest(host, runId);
         const limit = Math.min(manifest.frames.length, parseInt(maxFrames) || manifest.frames.length);
         const packs: Uint32Array[] = [];
-        const BATCH = 5; // push to renderer every few frames so it streams in
+        // Refresh a bounded number of times (each refresh rebuilds splat
+        // textures). pack/unzip are synchronous, so we must yield after each
+        // push or the rAF render loop never runs and nothing appears.
+        const updateEvery = Math.max(1, Math.floor(limit / 12));
         for (let i = 0; i < limit; i++) {
           const f = manifest.frames[i];
           packs.push(npzToPacked(await unzipNpz(await getAddedNpz(host, runId, f.frame_index))));
-          if (i % BATCH === BATCH - 1 || i === limit - 1) {
+          if ((i + 1) % updateEvery === 0 || i === limit - 1) {
             const merged = concatU32(packs);
             setBuffer(merged);
             setBounds(computeBounds(merged));
             setStatus(`streaming ${i + 1}/${limit} — ${merged.length / 8} gaussians`);
+            await new Promise((r) => setTimeout(r, 0)); // yield: let React commit + paint
           }
         }
       }
