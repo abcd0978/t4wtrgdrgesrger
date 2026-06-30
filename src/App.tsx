@@ -361,25 +361,41 @@ export default function App() {
     URL.revokeObjectURL(url);
   }, []);
 
+  // Per-gaussian frame index (from frameCum), so exports stay replayable.
+  function frameArrayFull(): Uint32Array | null {
+    if (!buffer || !frameCum) return null;
+    const arr = new Uint32Array(buffer.length / 8);
+    let f = 0;
+    for (let i = 0; i < arr.length; i++) {
+      while (f < frameCum.length - 1 && frameCum[f] <= i) f++;
+      arr[i] = f;
+    }
+    return arr;
+  }
+
   function exportPly() {
     if (!buffer) return;
-    downloadBlob(packedToPly(buffer), `${runId || "gaussians"}.ply`);
+    downloadBlob(packedToPly(buffer, frameArrayFull() ?? undefined), `${runId || "gaussians"}.ply`);
     setStatus("exported .ply");
   }
 
-  // Load a local .ply file into the viewer (no server needed).
+  // Load a local .ply file into the viewer (no server needed). Clears the view
+  // before the await so the camera refits to the new file; restores the timeline
+  // when the file carries frame info.
   async function onPlyFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file
     if (!file) return;
     setBusy(true); setStatus(`reading ${file.name}…`);
+    setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]);
+    setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
+    setPlaying(false); setCamDone(false); pendingView.current = null;
     try {
-      const b = parsePly(await file.arrayBuffer());
-      setSelection(new Set()); setUndoStack([]); setLiveBuffer(null);
-      setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false);
+      const { buffer: b, frameCum: fc } = parsePly(await file.arrayBuffer());
       setBuffer(b); setBounds(computeBounds(b));
       originalBuffer.current = b.slice();
-      setStatus(`loaded ${file.name}: ${b.length / 8} gaussians`);
+      if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
+      setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}`);
     } catch (err) {
       setStatus("ply error: " + (err as Error).message);
     } finally { setBusy(false); }
@@ -394,13 +410,20 @@ export default function App() {
   }, [playing, fps, clipIn, clipOut, frameCum]);
 
   // Export only the gaussians added within the clip range [in,out] as a .ply.
+  // Per-gaussian frame indices are rebased to start at 0 so the clip replays.
   function exportRangePly() {
     if (!buffer || !frameCum) return;
     const a = Math.min(clipIn, clipOut), b = Math.max(clipIn, clipOut);
     const lo = a > 0 ? frameCum[a - 1] : 0;
     const hi = frameCum[b];
     if (hi <= lo) return;
-    downloadBlob(packedToPly(buffer.subarray(lo * 8, hi * 8)), `${runId || "gaussians"}_f${a}-${b}.ply`);
+    const full = frameArrayFull();
+    let frames: Uint32Array | undefined;
+    if (full) {
+      frames = new Uint32Array(hi - lo);
+      for (let j = 0; j < hi - lo; j++) frames[j] = Math.max(0, full[lo + j] - a);
+    }
+    downloadBlob(packedToPly(buffer.subarray(lo * 8, hi * 8), frames), `${runId || "gaussians"}_f${a}-${b}.ply`);
     setStatus(`exported frames ${a}–${b} → ${hi - lo} gaussians (.ply)`);
   }
 

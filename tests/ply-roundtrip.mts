@@ -14,9 +14,11 @@ const op = new Float32Array([0.8, 0.5, 0.95]);
 const cov = covarianceFromScaleRotation(scales, quats, n);
 const packed = packSplats(n, centers, cov, rgb, op, false, false);
 
-const ply = await packedToPly(packed).arrayBuffer();
-const back = parsePly(ply);
+const frames = new Uint32Array([0, 0, 1]); // gaussian 0,1 -> frame 0, gaussian 2 -> frame 1
+const ply = await packedToPly(packed, frames).arrayBuffer();
+const { buffer: back, frameCum } = parsePly(ply);
 
+if (!frameCum || frameCum.join(",") !== "2,3") throw new Error(`frameCum wrong: ${frameCum}`);
 if (back.length !== packed.length) throw new Error(`length ${back.length} != ${packed.length}`);
 const a = new DataView(packed.buffer), b = new DataView(back.buffer);
 let posErr = 0, rgbaErr = 0;

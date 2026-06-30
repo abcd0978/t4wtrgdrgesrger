@@ -14,8 +14,11 @@ const PLY_PROPS = [
   "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3",
 ];
 
-/** Packed buffer -> 3DGS binary PLY blob. Skips alpha-0 (deleted) gaussians. */
-export function packedToPly(buffer: Uint32Array): Blob {
+/** Packed buffer -> 3DGS binary PLY blob. Skips alpha-0 (deleted) gaussians.
+ * If `frames` (per-slot frame index) is given, a non-standard `ushort frame`
+ * property is appended so the timeline can be rebuilt on re-load (other viewers
+ * ignore the extra property). */
+export function packedToPly(buffer: Uint32Array, frames?: Uint32Array): Blob {
   const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   const slots = buffer.length / 8;
   const live: number[] = [];
@@ -25,10 +28,11 @@ export function packedToPly(buffer: Uint32Array): Blob {
     "ply\nformat binary_little_endian 1.0\n" +
     `element vertex ${live.length}\n` +
     PLY_PROPS.map((p) => `property float ${p}`).join("\n") +
+    (frames ? "\nproperty ushort frame" : "") +
     "\nend_header\n";
   const headerBytes = new TextEncoder().encode(header);
 
-  const recSize = PLY_PROPS.length * 4;
+  const recSize = PLY_PROPS.length * 4 + (frames ? 2 : 0);
   const out = new ArrayBuffer(headerBytes.byteLength + live.length * recSize);
   new Uint8Array(out).set(headerBytes, 0);
   const odv = new DataView(out, headerBytes.byteLength);
@@ -50,6 +54,7 @@ export function packedToPly(buffer: Uint32Array): Blob {
       quaternion[0], quaternion[1], quaternion[2], quaternion[3],
     ];
     for (const v of rec) { odv.setFloat32(o, v, true); o += 4; }
+    if (frames) { odv.setUint16(o, Math.min(65535, frames[i]), true); o += 2; }
   }
   return new Blob([out], { type: "application/octet-stream" });
 }
@@ -79,8 +84,9 @@ const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
 /** Parse a 3DGS binary_little_endian PLY into the packed (N,8) uint32 buffer.
  * Handles f_dc color + opacity/scale/rot activations; falls back to red/green/blue
- * and a tiny isotropic scale for plain colored point clouds. */
-export function parsePly(buf: ArrayBuffer): Uint32Array {
+ * and a tiny isotropic scale for plain colored point clouds. If a `frame` property
+ * is present (our own exports), frameCum is rebuilt so the timeline replays. */
+export function parsePly(buf: ArrayBuffer): { buffer: Uint32Array; frameCum: number[] | null } {
   const bytes = new Uint8Array(buf);
   const header = new TextDecoder("ascii").decode(bytes.subarray(0, Math.min(bytes.length, 1 << 16)));
   const ehIdx = header.indexOf("end_header");
@@ -117,6 +123,8 @@ export function parsePly(buf: ArrayBuffer): Uint32Array {
   const rgb = new Float32Array(count * 3);
   const opacity = new Float32Array(count);
   const hasSH = has("f_dc_0"), hasRGB = has("red"), hasScale = has("scale_0"), hasRot = has("rot_0"), hasOp = has("opacity");
+  const hasFrame = has("frame");
+  const frameOf = hasFrame ? new Uint16Array(count) : null;
 
   for (let i = 0; i < count; i++) {
     centers[i * 3] = get(i, "x")!; centers[i * 3 + 1] = get(i, "y")!; centers[i * 3 + 2] = get(i, "z")!;
@@ -129,8 +137,21 @@ export function parsePly(buf: ArrayBuffer): Uint32Array {
     else scales[i * 3] = scales[i * 3 + 1] = scales[i * 3 + 2] = 0.01; // ponytail: point cloud -> tiny splats
     if (hasRot) for (let k = 0; k < 4; k++) wxyz[i * 4 + k] = get(i, `rot_${k}`)!;
     else wxyz[i * 4] = 1; // identity
+    if (frameOf) frameOf[i] = get(i, "frame")!;
+  }
+
+  // Rebuild cumulative per-frame counts (vertices are stored in frame order).
+  let frameCum: number[] | null = null;
+  if (frameOf) {
+    let maxF = 0;
+    for (let i = 0; i < count; i++) if (frameOf[i] > maxF) maxF = frameOf[i];
+    const per = new Array(maxF + 1).fill(0);
+    for (let i = 0; i < count; i++) per[frameOf[i]]++;
+    frameCum = [];
+    let acc = 0;
+    for (let f = 0; f <= maxF; f++) { acc += per[f]; frameCum.push(acc); }
   }
 
   const covTriu = covarianceFromScaleRotation(scales, wxyz, count);
-  return packSplats(count, centers, covTriu, rgb, opacity, false, false);
+  return { buffer: packSplats(count, centers, covTriu, rgb, opacity, false, false), frameCum };
 }
