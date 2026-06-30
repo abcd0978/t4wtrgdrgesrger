@@ -16,6 +16,7 @@ import { readUrlState, buildShareUrl } from "./lib/urlState";
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
 type View = { p: [number, number, number]; t: [number, number, number] };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const SPEEDS = [2, 5, 10, 20, 30]; // timeline playback fps presets
 
 const HELP = [
   ["드래그", "카메라 회전"],
@@ -65,6 +66,10 @@ export default function App() {
   const [vis, setVis] = React.useState<Vis>({ mode: "all", set: new Set() });
   const [frameCum, setFrameCum] = React.useState<number[] | null>(null); // delta cumulative counts
   const [frameIdx, setFrameIdx] = React.useState(0);
+  const [playing, setPlaying] = React.useState(false);
+  const [fps, setFps] = React.useState(10);
+  const [clipIn, setClipIn] = React.useState(0);
+  const [clipOut, setClipOut] = React.useState(0);
   const [measureMode, setMeasureMode] = React.useState(false);
   const [measurePts, setMeasurePts] = React.useState<[number, number, number][]>([]);
   const [camDone, setCamDone] = React.useState(false); // first fit / URL view applied
@@ -85,7 +90,7 @@ export default function App() {
     const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
     setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
     setUndoStack([]); setLiveBuffer(null); originalBuffer.current = null;
-    setVis({ mode: "all", set: new Set() }); setFrameCum(null);
+    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false);
     try {
       let final: Uint32Array | null = null;
       if (_mode === "snapshot") {
@@ -114,6 +119,7 @@ export default function App() {
         }
         const cum = manifest.frames.slice(0, limit).map((f) => f.cumulative_gaussian_count);
         setFrameCum(cum); setFrameIdx(cum.length - 1);
+        setClipIn(0); setClipOut(cum.length - 1);
         final = capacity;
       }
       if (final) originalBuffer.current = final.slice();
@@ -303,6 +309,25 @@ export default function App() {
     setStatus("exported .ply");
   }
 
+  // Timeline auto-play: advance the scrub frame, looping within the [in,out] clip.
+  React.useEffect(() => {
+    if (!playing || !frameCum) return;
+    const a = Math.min(clipIn, clipOut), b = Math.max(clipIn, clipOut);
+    const id = setInterval(() => setFrameIdx((i) => (i >= b ? a : i + 1)), 1000 / Math.max(1, fps));
+    return () => clearInterval(id);
+  }, [playing, fps, clipIn, clipOut, frameCum]);
+
+  // Export only the gaussians added within the clip range [in,out] as a .ply.
+  function exportRangePly() {
+    if (!buffer || !frameCum) return;
+    const a = Math.min(clipIn, clipOut), b = Math.max(clipIn, clipOut);
+    const lo = a > 0 ? frameCum[a - 1] : 0;
+    const hi = frameCum[b];
+    if (hi <= lo) return;
+    downloadBlob(packedToPly(buffer.subarray(lo * 8, hi * 8)), `${runId || "gaussians"}_f${a}-${b}.ply`);
+    setStatus(`exported frames ${a}–${b} → ${hi - lo} gaussians (.ply)`);
+  }
+
   const stats = React.useMemo(() => {
     if (!buffer || !bounds) return null;
     const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
@@ -455,11 +480,21 @@ export default function App() {
       )}
 
       {frameCum && frameCum.length > 1 && (
-        <div className="panel" style={{ bottom: 10, left: "50%", transform: "translateX(-50%)", minWidth: 380 }}>
-          <div className="panel-section" style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <span className="panel-title" style={{ whiteSpace: "nowrap" }}>▶ 타임라인</span>
-            <input type="range" className="grow" min={0} max={frameCum.length - 1} step={1} value={frameIdx} onChange={(e) => setFrameIdx(parseInt(e.target.value))} />
-            <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum.length} · {frameCum[frameIdx].toLocaleString()}</span>
+        <div className="panel" style={{ bottom: 10, left: "50%", transform: "translateX(-50%)", width: 480, maxWidth: "calc(100vw - 20px)" }}>
+          <div className="panel-section" style={{ gap: 8 }}>
+            <div className="row" style={{ gap: 10 }}>
+              <button className={playing ? "active icon" : "icon"} onClick={() => setPlaying((p) => !p)} title="재생 / 일시정지">{playing ? "⏸" : "▶"}</button>
+              <button className="ghost" style={{ minWidth: 56 }} onClick={() => setFps((f) => SPEEDS[(SPEEDS.indexOf(f) + 1) % SPEEDS.length])} title="재생 속도">{fps}fps</button>
+              <input type="range" className="grow" min={0} max={frameCum.length - 1} step={1} value={frameIdx} onChange={(e) => { setPlaying(false); setFrameIdx(parseInt(e.target.value)); }} />
+              <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum.length}</span>
+            </div>
+            <div className="row" style={{ gap: 8, fontSize: 12 }}>
+              <span className="muted">구간</span>
+              <button className="ghost" onClick={() => setClipIn(frameIdx)} title="구간 시작 = 현재 프레임">시작 ⟵ 현재</button>
+              <button className="ghost" onClick={() => setClipOut(frameIdx)} title="구간 끝 = 현재 프레임">현재 ⟶ 끝</button>
+              <span className="num muted grow" style={{ textAlign: "center" }}>[{Math.min(clipIn, clipOut)} – {Math.max(clipIn, clipOut)}]</span>
+              <button onClick={exportRangePly} title="선택 구간의 가우시안을 .ply로 추출">구간 .ply</button>
+            </div>
           </div>
         </div>
       )}
