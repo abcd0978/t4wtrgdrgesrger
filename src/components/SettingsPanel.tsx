@@ -42,7 +42,7 @@ export function SettingsPanel({
       position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
       display: "flex", flexDirection: "column", gap: 6, padding: 10,
       background: "rgba(0,0,0,0.78)", color: "#fff", font: "14px monospace", borderRadius: 6,
-      maxHeight: "85vh", overflowY: "auto",
+      maxHeight: "calc(100dvh - 62px)", overflowY: "auto",
     }}>
       <b>shader</b>
       <NumSlider label="splat size" k="splatScale" min={0.1} max={5} step={0.1} settings={settings} setSettings={setSettings} />

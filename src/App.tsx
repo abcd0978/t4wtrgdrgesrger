@@ -551,7 +551,7 @@ export default function App() {
       )}
 
       {showHelp && (
-        <div className="panel" style={{ left: 10, right: 10, bottom: hasTimeline ? 112 : 10, maxWidth: "min(420px, calc(100vw - 20px))" }}>
+        <div className="panel" style={{ left: 10, bottom: hasTimeline ? 112 : 10, width: "min(420px, calc(100vw - 20px))", maxHeight: `calc(100dvh - ${(hasTimeline ? 112 : 10) + 16}px)` }}>
           <div className="panel-section">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="panel-title">📖 사용 방법</span>
@@ -567,7 +567,7 @@ export default function App() {
       )}
 
       {selection.size > 0 && !measureMode && (
-        <div className="panel scroll" style={{ top: 62, left: 10, width: "min(214px, calc(100vw - 20px))", maxHeight: "calc(100vh - 84px)" }}>
+        <div className="panel scroll" style={{ top: 62, left: 10, width: "min(214px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
           <div className="panel-section">
             <div className="panel-title">선택 {selection.size.toLocaleString()}개</div>
 
@@ -621,7 +621,7 @@ export default function App() {
       )}
 
       {measureMode && (
-        <div className="panel" style={{ top: 64, left: "50%", transform: "translateX(-50%)", maxWidth: "min(360px, calc(100vw - 20px))" }}>
+        <div className="panel" style={{ top: 64, left: "50%", transform: "translateX(-50%)", maxWidth: "min(360px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 80px)" }}>
           <div className="panel-section" style={{ gap: 6 }}>
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="panel-title">📏 측정</span>
@@ -659,7 +659,7 @@ export default function App() {
       )}
 
       {showStats && stats && (
-        <div className="panel" style={{ right: 10, bottom: hasTimeline ? 112 : 10, minWidth: 200, maxWidth: "calc(100vw - 20px)" }}>
+        <div className="panel" style={{ right: 10, bottom: hasTimeline ? 112 : 10, minWidth: 200, maxWidth: "calc(100vw - 20px)", maxHeight: `calc(100dvh - ${(hasTimeline ? 112 : 10) + 16}px)` }}>
           <div className="panel-section" style={{ gap: 6 }}>
             <div className="panel-title">📊 통계</div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">가우시안</span><span className="num">{stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()}`}</span></div>
