@@ -24,19 +24,21 @@ export interface SceneOpts {
   grid: GridOpts; setGrid: React.Dispatch<React.SetStateAction<GridOpts>>;
   dpr: number; setDpr: (v: number) => void;
   showAxes: boolean; setShowAxes: (v: boolean) => void;
+  showScaleBar: boolean; setShowScaleBar: (v: boolean) => void;
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
   cameraToOrigin: () => void;
 }
 
 export function SettingsPanel({
-  settings, setSettings, scene,
+  settings, setSettings, scene, onClose,
 }: {
   settings: RenderSettings;
   setSettings: React.Dispatch<React.SetStateAction<RenderSettings>>;
   scene: SceneOpts;
+  onClose: () => void;
 }) {
-  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin } = scene;
+  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, showScaleBar, setShowScaleBar, renderFrac, setRenderFrac, setView, cameraToOrigin } = scene;
   return (
     <div className="scroll" style={{
       position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
@@ -44,6 +46,13 @@ export function SettingsPanel({
       background: "rgba(0,0,0,0.78)", color: "#fff", font: "14px monospace", borderRadius: 6,
       maxHeight: "calc(100dvh - 62px)", overflowY: "auto",
     }}>
+      <div style={{
+        position: "sticky", top: -10, zIndex: 1, margin: "-10px -10px 2px", padding: "8px 10px",
+        background: "rgba(0,0,0,0.92)", display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <b>고급 설정</b>
+        <button className="ghost icon" onClick={onClose} title="닫기">✕</button>
+      </div>
       <b>shader</b>
       <NumSlider label="splat size" k="splatScale" min={0.1} max={5} step={0.1} settings={settings} setSettings={setSettings} />
       <NumSlider label="min px" k="minSplatPx" min={0} max={20} step={0.5} settings={settings} setSettings={setSettings} />
@@ -61,6 +70,7 @@ export function SettingsPanel({
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)</label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showScaleBar} onChange={(e) => setShowScaleBar(e.target.checked)} /> 스케일 바</label>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
 
       <b>성능 (LOD)</b>

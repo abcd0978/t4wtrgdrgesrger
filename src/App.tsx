@@ -8,7 +8,7 @@ import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
 import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ScaleBarProbe, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
@@ -21,6 +21,13 @@ const FPS_MIN = 0.5, FPS_MAX = 60;
 // Persist the load inputs (server url / run / mode / frames) across visits.
 const LS = "vwd:";
 const lsGet = (k: string, d: string) => { try { return localStorage.getItem(LS + k) ?? d; } catch { return d; } };
+
+// Round to a "nice" 1/2/5 × 10ⁿ value (for the scale bar label).
+const niceNumber = (x: number) => {
+  const p = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / p;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
+};
 
 const HELP = [
   ["드래그", "카메라 회전"],
@@ -55,6 +62,8 @@ export default function App() {
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
   const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
   const [showTimeline, setShowTimeline] = React.useState(true);
+  const [showScaleBar, setShowScaleBar] = React.useState(true);
+  const [worldPerPx, setWorldPerPx] = React.useState(0);
   const [bg, setBg] = React.useState("#ffffff");
   const [showGrid, setShowGrid] = React.useState(true);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
@@ -525,6 +534,9 @@ export default function App() {
 
   const hasTimeline = !!(frameCum && frameCum.length > 1);
   const timelineVisible = hasTimeline && showTimeline;
+  const scaleBar = showScaleBar && bounds && worldPerPx > 0
+    ? (() => { const nice = niceNumber(90 * worldPerPx); return { nice, px: nice / worldPerPx }; })()
+    : null;
   const clipA = Math.min(clipIn, clipOut), clipB = Math.max(clipIn, clipOut);
   const tlPct = (i: number) => (hasTimeline ? (i / (frameCum!.length - 1)) * 100 : 0);
   const rangeCount = frameCum ? frameCum[clipB] - (clipA > 0 ? frameCum[clipA - 1] : 0) : 0;
@@ -565,7 +577,8 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin }}
+          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, showScaleBar, setShowScaleBar, renderFrac, setRenderFrac, setView, cameraToOrigin }}
+          onClose={() => setShowPanel(false)}
         />
       )}
 
@@ -588,7 +601,10 @@ export default function App() {
       {selection.size > 0 && !measureMode && (
         <div className="panel scroll" style={{ top: 62, left: 10, width: "min(214px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
           <div className="panel-section">
-            <div className="panel-title">선택 {selection.size.toLocaleString()}개</div>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="panel-title">선택 {selection.size.toLocaleString()}개</span>
+              <button className="ghost icon" onClick={() => setSelection(new Set())} title="선택 해제">✕</button>
+            </div>
 
             <label className="row muted">이동
               <input type="range" className="grow" min={0.01} max={1} step={0.01} value={moveStep} onChange={(e) => setMoveStep(parseFloat(e.target.value))} />
@@ -689,6 +705,19 @@ export default function App() {
         </div>
       )}
 
+      {scaleBar && (
+        <div className="panel" style={{ bottom: timelineVisible ? 118 : 16, left: "50%", transform: "translateX(-50%)", padding: "6px 12px", pointerEvents: "none" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+            <span className="num" style={{ fontSize: 12 }}>{scaleBar.nice >= 1 ? scaleBar.nice : +scaleBar.nice.toPrecision(2)}</span>
+            <div style={{ position: "relative", width: scaleBar.px, height: 7 }}>
+              <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, borderBottom: "2px solid #fff" }} />
+              <div style={{ position: "absolute", left: 0, bottom: 0, width: 2, height: 7, background: "#fff" }} />
+              <div style={{ position: "absolute", right: 0, bottom: 0, width: 2, height: 7, background: "#fff" }} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {drag && (
         <div style={{
           position: "absolute", zIndex: 2, pointerEvents: "none",
@@ -704,6 +733,7 @@ export default function App() {
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />
+        {showScaleBar && <ScaleBarProbe onChange={setWorldPerPx} />}
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (

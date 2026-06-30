@@ -434,6 +434,23 @@ export function RotateHandle({
   );
 }
 
+/** Reports world units per screen pixel at the orbit target (for the scale bar),
+ * throttled to >1% changes so it doesn't re-render every frame. */
+export function ScaleBarProbe({ onChange }: { onChange: (worldPerPx: number) => void }) {
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3 } | null;
+  const last = React.useRef(0);
+  useFrame((state) => {
+    const cam = state.camera as THREE.PerspectiveCamera;
+    const dist = controls?.target ? cam.position.distanceTo(controls.target) : 10;
+    const wpp = (2 * dist * Math.tan((cam.fov * DEG) / 2)) / state.size.height;
+    if (last.current === 0 || Math.abs(wpp - last.current) > last.current * 0.01) {
+      last.current = wpp;
+      onChange(wpp);
+    }
+  });
+  return null;
+}
+
 /** WASD / arrow-key fly: translate camera + orbit target together so it reads as
  * moving through the scene. Speed scales with the orbit distance (so it works at
  * any zoom); Shift = faster, Q/E (or Space) = down/up along world-up (z). */
