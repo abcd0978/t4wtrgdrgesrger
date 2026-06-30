@@ -10,7 +10,7 @@ import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/math
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
-import { packedToPly } from "./lib/ply";
+import { packedToPly, parsePly } from "./lib/ply";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
@@ -26,8 +26,9 @@ const HELP = [
   ["주황 핸들 드래그", "선택한 것 이동"],
   ["왼쪽 패널", "이동·회전·스케일·색·복제·숨기기·격리·삭제"],
   ["측정 버튼", "두 점 더블클릭 → 실측 거리"],
-  ["타임라인 (delta)", "슬라이더로 스캔 누적 재생"],
-  ["내보내기 / 스크린샷 / 공유", "상단 버튼 (.ply / .png / 링크)"],
+  ["타임라인 (delta)", "▶ 재생 · 속도 · 구간 지정 → 구간 .ply"],
+  ["PLY 열기 / 내보내기 / 공유", "로컬 .ply 로드 · .ply 저장 · 링크"],
+  ["스크린샷", "현재 화면 PNG 저장"],
   ["undo / reset", "되돌리기 / 처음으로"],
   ["⚙ 버튼", "렌더 설정 열기"],
 ];
@@ -74,6 +75,7 @@ export default function App() {
   const [measurePts, setMeasurePts] = React.useState<[number, number, number][]>([]);
   const [camDone, setCamDone] = React.useState(false); // first fit / URL view applied
   const captureRef = React.useRef<((name: string) => void) | null>(null);
+  const fileRef = React.useRef<HTMLInputElement>(null);
   const viewRef = React.useRef<(() => View) | null>(null);
   const pendingView = React.useRef<View | null>(null);
   const pendingSel = React.useRef<number[] | null>(null);
@@ -309,6 +311,24 @@ export default function App() {
     setStatus("exported .ply");
   }
 
+  // Load a local .ply file into the viewer (no server needed).
+  async function onPlyFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setBusy(true); setStatus(`reading ${file.name}…`);
+    try {
+      const b = parsePly(await file.arrayBuffer());
+      setSelection(new Set()); setUndoStack([]); setLiveBuffer(null);
+      setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false);
+      setBuffer(b); setBounds(computeBounds(b));
+      originalBuffer.current = b.slice();
+      setStatus(`loaded ${file.name}: ${b.length / 8} gaussians`);
+    } catch (err) {
+      setStatus("ply error: " + (err as Error).message);
+    } finally { setBusy(false); }
+  }
+
   // Timeline auto-play: advance the scrub frame, looping within the [in,out] clip.
   React.useEffect(() => {
     if (!playing || !frameCum) return;
@@ -359,6 +379,10 @@ export default function App() {
   }
 
   const display = liveBuffer ?? displayBuffer;
+  const hasTimeline = !!(frameCum && frameCum.length > 1);
+  const clipA = Math.min(clipIn, clipOut), clipB = Math.max(clipIn, clipOut);
+  const tlPct = (i: number) => (hasTimeline ? (i / (frameCum!.length - 1)) * 100 : 0);
+  const rangeCount = frameCum ? frameCum[clipB] - (clipA > 0 ? frameCum[clipA - 1] : 0) : 0;
 
   return (
     <div style={{ position: "fixed", inset: 0 }}>
@@ -374,6 +398,8 @@ export default function App() {
         </select>
         {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ width: 56 }} />}
         <button className="accent" onClick={() => load()} disabled={busy}>{busy ? "…" : "Load"}</button>
+        <input ref={fileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onPlyFile} />
+        <button onClick={() => fileRef.current?.click()} disabled={busy} title="로컬 .ply 파일 열기">PLY 열기</button>
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
@@ -397,7 +423,7 @@ export default function App() {
       )}
 
       {showHelp && (
-        <div className="panel" style={{ left: 10, bottom: 10, maxWidth: 420 }}>
+        <div className="panel" style={{ left: 10, bottom: hasTimeline ? 112 : 10, maxWidth: 420 }}>
           <div className="panel-section">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="panel-title">📖 사용 방법</span>
@@ -479,20 +505,25 @@ export default function App() {
         </div>
       )}
 
-      {frameCum && frameCum.length > 1 && (
-        <div className="panel" style={{ bottom: 10, left: "50%", transform: "translateX(-50%)", width: 480, maxWidth: "calc(100vw - 20px)" }}>
-          <div className="panel-section" style={{ gap: 8 }}>
-            <div className="row" style={{ gap: 10 }}>
-              <button className={playing ? "active icon" : "icon"} onClick={() => setPlaying((p) => !p)} title="재생 / 일시정지">{playing ? "⏸" : "▶"}</button>
-              <button className="ghost" style={{ minWidth: 56 }} onClick={() => setFps((f) => SPEEDS[(SPEEDS.indexOf(f) + 1) % SPEEDS.length])} title="재생 속도">{fps}fps</button>
-              <input type="range" className="grow" min={0} max={frameCum.length - 1} step={1} value={frameIdx} onChange={(e) => { setPlaying(false); setFrameIdx(parseInt(e.target.value)); }} />
-              <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum.length}</span>
+      {hasTimeline && (
+        <div className="panel" style={{ bottom: 10, left: 10, right: 10 }}>
+          <div className="panel-section" style={{ gap: 12 }}>
+            <div className="timeline-track">
+              <div className="tl-bar" />
+              <div className="tl-band" style={{ left: `${tlPct(clipA)}%`, width: `${tlPct(clipB) - tlPct(clipA)}%` }} />
+              <div className="tl-mark" style={{ left: `${tlPct(clipA)}%` }}><span className="lbl">구간 시작</span></div>
+              <div className="tl-mark" style={{ left: `${tlPct(clipB)}%` }}><span className="lbl">구간 끝</span></div>
+              <input type="range" className="timeline" min={0} max={frameCum!.length - 1} step={1} value={frameIdx} onChange={(e) => { setPlaying(false); setFrameIdx(parseInt(e.target.value)); }} />
             </div>
-            <div className="row" style={{ gap: 8, fontSize: 12 }}>
-              <span className="muted">구간</span>
-              <button className="ghost" onClick={() => setClipIn(frameIdx)} title="구간 시작 = 현재 프레임">시작 ⟵ 현재</button>
-              <button className="ghost" onClick={() => setClipOut(frameIdx)} title="구간 끝 = 현재 프레임">현재 ⟶ 끝</button>
-              <span className="num muted grow" style={{ textAlign: "center" }}>[{Math.min(clipIn, clipOut)} – {Math.max(clipIn, clipOut)}]</span>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button className={playing ? "active icon" : "icon"} onClick={() => setPlaying((p) => !p)} title="재생 / 일시정지">{playing ? "⏸" : "▶"}</button>
+              <button className="ghost" style={{ minWidth: 58 }} onClick={() => setFps((f) => SPEEDS[(SPEEDS.indexOf(f) + 1) % SPEEDS.length])} title="재생 속도">{fps}fps</button>
+              <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum!.length}</span>
+              <span className="grow" />
+              <button onClick={() => setClipIn(frameIdx)} title="현재 프레임을 구간 시작으로">구간 시작</button>
+              <button onClick={() => setClipOut(frameIdx)} title="현재 프레임을 구간 끝으로">구간 끝</button>
+              <button className="ghost" onClick={() => { setClipIn(0); setClipOut(frameCum!.length - 1); }} title="구간을 전체로 되돌리기">구간 해제</button>
+              <span className="num muted" style={{ whiteSpace: "nowrap" }}>[{clipA}–{clipB}] · {rangeCount.toLocaleString()}</span>
               <button onClick={exportRangePly} title="선택 구간의 가우시안을 .ply로 추출">구간 .ply</button>
             </div>
           </div>
@@ -500,7 +531,7 @@ export default function App() {
       )}
 
       {showStats && stats && (
-        <div className="panel" style={{ right: 10, bottom: 10, minWidth: 200 }}>
+        <div className="panel" style={{ right: 10, bottom: hasTimeline ? 112 : 10, minWidth: 200 }}>
           <div className="panel-section" style={{ gap: 6 }}>
             <div className="panel-title">📊 통계</div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">가우시안</span><span className="num">{stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()}`}</span></div>
