@@ -8,7 +8,7 @@ import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, radius, selCenter } from "./lib/bounds";
 import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
@@ -21,6 +21,7 @@ const FPS_MIN = 0.5, FPS_MAX = 60;
 const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
+  ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
   ["더블클릭", "가우시안 1개 선택"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
@@ -626,6 +627,7 @@ export default function App() {
       <Canvas dpr={dpr} gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault />
+        <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge viewRef={viewRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />

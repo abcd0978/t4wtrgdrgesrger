@@ -394,3 +394,66 @@ export function RotateHandle({
     </group>
   );
 }
+
+/** WASD / arrow-key fly: translate camera + orbit target together so it reads as
+ * moving through the scene. Speed scales with the orbit distance (so it works at
+ * any zoom); Shift = faster, Q/E (or Space) = down/up along world-up (z). */
+const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e", " ", "shift", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
+
+export function KeyboardFly() {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
+  const keys = React.useRef<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    const isField = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA");
+    };
+    const down = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (!FLY_KEYS.has(k) || isField(e.target)) return;
+      keys.current.add(k);
+      if (k.startsWith("arrow") || k === " ") e.preventDefault(); // these scroll the page
+    };
+    const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase());
+    const blur = () => keys.current.clear();
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+
+  const fwd = React.useMemo(() => new THREE.Vector3(), []);
+  const right = React.useMemo(() => new THREE.Vector3(), []);
+  const move = React.useMemo(() => new THREE.Vector3(), []);
+  const UP = React.useMemo(() => new THREE.Vector3(0, 0, 1), []);
+
+  useFrame((_, delta) => {
+    const ks = keys.current;
+    if (ks.size === 0 || !controls) return;
+    camera.getWorldDirection(fwd);
+    right.crossVectors(fwd, UP);
+    if (right.lengthSq() < 1e-8) right.set(1, 0, 0); // looking straight up/down
+    right.normalize();
+    move.set(0, 0, 0);
+    if (ks.has("w") || ks.has("arrowup")) move.add(fwd);
+    if (ks.has("s") || ks.has("arrowdown")) move.addScaledVector(fwd, -1);
+    if (ks.has("d") || ks.has("arrowright")) move.add(right);
+    if (ks.has("a") || ks.has("arrowleft")) move.addScaledVector(right, -1);
+    if (ks.has("e") || ks.has(" ")) move.add(UP);
+    if (ks.has("q")) move.addScaledVector(UP, -1);
+    if (move.lengthSq() === 0) return;
+    const dist = camera.position.distanceTo(controls.target);
+    const speed = Math.max(dist * 0.8, 0.5) * (ks.has("shift") ? 3 : 1);
+    move.normalize().multiplyScalar(speed * Math.min(delta, 0.05));
+    camera.position.add(move);
+    controls.target.add(move);
+    controls.update();
+  });
+  return null;
+}
