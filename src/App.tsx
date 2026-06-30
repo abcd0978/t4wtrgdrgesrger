@@ -18,6 +18,10 @@ type View = { p: [number, number, number]; t: [number, number, number] };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const FPS_MIN = 0.5, FPS_MAX = 60;
 
+// Persist the load inputs (server url / run / mode / frames) across visits.
+const LS = "vwd:";
+const lsGet = (k: string, d: string) => { try { return localStorage.getItem(LS + k) ?? d; } catch { return d; } };
+
 const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
@@ -36,11 +40,11 @@ const HELP = [
 ];
 
 export default function App() {
-  const [host, setHost] = React.useState("");
-  const [runId, setRunId] = React.useState("online-3dgs-desk-20260624-spnet-gated-full-r2-deltas");
+  const [host, setHost] = React.useState(() => lsGet("host", ""));
+  const [runId, setRunId] = React.useState(() => lsGet("runId", "online-3dgs-desk-20260624-spnet-gated-full-r2-deltas"));
   const [runs, setRuns] = React.useState<RunInfo[]>([]);
-  const [mode, setMode] = React.useState<"snapshot" | "delta">("snapshot");
-  const [maxFrames, setMaxFrames] = React.useState("100");
+  const [mode, setMode] = React.useState<"snapshot" | "delta">(() => (lsGet("mode", "snapshot") === "delta" ? "delta" : "snapshot"));
+  const [maxFrames, setMaxFrames] = React.useState(() => lsGet("maxFrames", "100"));
   const [buffer, setBuffer] = React.useState<Uint32Array | null>(null);
   const [bounds, setBounds] = React.useState<Bounds | null>(null);
   const [status, setStatus] = React.useState("idle");
@@ -95,6 +99,16 @@ export default function App() {
   selectionRef.current = selection;
 
   React.useEffect(() => { getRuns(host).then(setRuns).catch(() => setRuns([])); }, [host]);
+
+  // Remember the load inputs so a return visit doesn't need re-typing.
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(LS + "host", host);
+      localStorage.setItem(LS + "runId", runId);
+      localStorage.setItem(LS + "mode", mode);
+      localStorage.setItem(LS + "maxFrames", maxFrames);
+    } catch { /* storage unavailable (private mode) */ }
+  }, [host, runId, mode, maxFrames]);
 
   async function load(over?: Partial<{ host: string; runId: string; mode: "snapshot" | "delta"; maxFrames: string }>) {
     const _host = over?.host ?? host, _run = over?.runId ?? runId;
