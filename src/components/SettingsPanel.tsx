@@ -24,6 +24,8 @@ export interface SceneOpts {
   grid: GridOpts; setGrid: React.Dispatch<React.SetStateAction<GridOpts>>;
   dpr: number; setDpr: (v: number) => void;
   showAxes: boolean; setShowAxes: (v: boolean) => void;
+  renderFrac: number; setRenderFrac: (v: number) => void;
+  setView: (dir: [number, number, number]) => void;
 }
 
 export function SettingsPanel({
@@ -33,7 +35,7 @@ export function SettingsPanel({
   setSettings: React.Dispatch<React.SetStateAction<RenderSettings>>;
   scene: SceneOpts;
 }) {
-  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes } = scene;
+  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView } = scene;
   return (
     <div style={{
       position: "absolute", zIndex: 3, top: 46, right: 8, width: 280,
@@ -58,6 +60,23 @@ export function SettingsPanel({
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)</label>
+
+      <b>성능 (LOD)</b>
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+        <span style={{ width: 84 }}>표시 비율</span>
+        <input type="range" min={0.05} max={1} step={0.05} value={renderFrac} onChange={(e) => setRenderFrac(parseFloat(e.target.value))} style={{ flex: 1 }} />
+        <span style={{ width: 46, textAlign: "right" }}>{Math.round(renderFrac * 100)}%</span>
+      </label>
+      <span style={{ fontSize: 12, opacity: 0.7 }}>가우시안이 많아 렉이면 낮추세요 (선택·편집은 전체 유지)</span>
+
+      <b>뷰</b>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button style={{ flex: 1 }} onClick={() => setView([1, -1, 1])}>대각</button>
+        <button style={{ flex: 1 }} onClick={() => setView([0, 0, 1])}>위</button>
+        <button style={{ flex: 1 }} onClick={() => setView([0, -1, 0])}>정면</button>
+        <button style={{ flex: 1 }} onClick={() => setView([1, 0, 0])}>측면</button>
+      </div>
+
       <button onClick={() => setSettings(DEFAULT_SETTINGS)} style={{ padding: "4px 8px", marginTop: 4 }}>reset shader</button>
     </div>
   );

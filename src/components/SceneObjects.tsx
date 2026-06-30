@@ -6,6 +6,31 @@ import { type Bounds, center, radius, selCenter } from "../lib/bounds";
 export interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
 export interface DragRect { x0: number; y0: number; x1: number; y1: number }
 
+const DEG = Math.PI / 180;
+
+/** World-space size that projects to a constant `px` on screen at `worldPos`
+ * (so gizmos look the same size regardless of camera distance). */
+function screenWorldScale(camera: THREE.Camera, worldPos: THREE.Vector3, viewportH: number, px: number): number {
+  const cam = camera as THREE.PerspectiveCamera;
+  const d = cam.position.distanceTo(worldPos);
+  return (d * 2 * Math.tan((cam.fov * DEG) / 2) / viewportH) * px;
+}
+
+/** A unit sphere kept at a constant on-screen radius (`px`). */
+function ScreenSphere({ position, px, color }: { position: [number, number, number]; px: number; color: string }) {
+  const ref = React.useRef<THREE.Mesh>(null);
+  useFrame((state) => {
+    const m = ref.current;
+    if (m) m.scale.setScalar(screenWorldScale(state.camera, m.position, state.size.height, px));
+  });
+  return (
+    <mesh ref={ref} position={position} renderOrder={20000}>
+      <sphereGeometry args={[1, 16, 16]} />
+      <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.9} />
+    </mesh>
+  );
+}
+
 type Controls = { target: { set: (x: number, y: number, z: number) => void }; update: () => void } | null;
 
 /** Fit the camera to the data (z-up, like viser). Repositions only on the first
@@ -49,22 +74,35 @@ export function ApplyCamera({ view, onApplied }: { view: { p: [number, number, n
   return null;
 }
 
-/** Publishes a getter for the current camera pos+target (for share URLs). */
-export function CameraBridge({ viewRef }: { viewRef: React.MutableRefObject<(() => { p: [number, number, number]; t: [number, number, number] }) | null> }) {
+export interface CameraApi {
+  get: () => { p: [number, number, number]; t: [number, number, number] };
+  apply: (p: [number, number, number], t: [number, number, number]) => void;
+}
+
+/** Publishes get/apply for the camera pos+target (share URLs + view presets). */
+export function CameraBridge({ apiRef }: { apiRef: React.MutableRefObject<CameraApi | null> }) {
   const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as { target?: { x: number; y: number; z: number } } | null;
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
   React.useEffect(() => {
-    viewRef.current = () => ({
-      p: [camera.position.x, camera.position.y, camera.position.z],
-      t: controls?.target ? [controls.target.x, controls.target.y, controls.target.z] : [0, 0, 0],
-    });
-    return () => { viewRef.current = null; };
-  }, [camera, controls, viewRef]);
+    apiRef.current = {
+      get: () => ({
+        p: [camera.position.x, camera.position.y, camera.position.z],
+        t: controls?.target ? [controls.target.x, controls.target.y, controls.target.z] : [0, 0, 0],
+      }),
+      apply: (p, t) => {
+        camera.up.set(0, 0, 1);
+        camera.position.set(p[0], p[1], p[2]);
+        if (controls?.target) { controls.target.set(t[0], t[1], t[2]); controls.update(); }
+        else camera.lookAt(t[0], t[1], t[2]);
+      },
+    };
+    return () => { apiRef.current = null; };
+  }, [camera, controls, apiRef]);
   return null;
 }
 
 /** Two-point measure: a sphere at each picked point + a connecting line. */
-export function MeasureView({ points, size }: { points: [number, number, number][]; size: number }) {
+export function MeasureView({ points }: { points: [number, number, number][] }) {
   const lineGeo = React.useMemo(() => {
     if (points.length < 2) return null;
     const g = new THREE.BufferGeometry();
@@ -73,12 +111,7 @@ export function MeasureView({ points, size }: { points: [number, number, number]
   }, [points]);
   return (
     <>
-      {points.map((p, i) => (
-        <mesh key={i} position={p} renderOrder={20000}>
-          <sphereGeometry args={[size, 16, 16]} />
-          <meshBasicMaterial color="#00d0ff" depthTest={false} transparent opacity={0.9} />
-        </mesh>
-      ))}
+      {points.map((p, i) => <ScreenSphere key={i} position={p} px={7} color="#00d0ff" />)}
       {lineGeo && (
         <lineSegments frustumCulled={false} renderOrder={20000} geometry={lineGeo}>
           <lineBasicMaterial color="#00d0ff" depthTest={false} />
@@ -247,10 +280,10 @@ export function CanvasCapture({
  * is broken in this stack. onMove fires the running net delta live during the
  * drag; onStart/onEnd bracket it (snapshot for undo / finalize). */
 export function DragMoveHandle({
-  buffer, selection, onStart, onMove, onEnd, size,
+  buffer, selection, onStart, onMove, onEnd,
 }: {
   buffer: Uint32Array | null; selection: Set<number>;
-  onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void; size: number;
+  onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void;
 }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
@@ -264,6 +297,10 @@ export function DragMoveHandle({
   React.useEffect(() => {
     if (meshRef.current) meshRef.current.position.set(pos[0], pos[1], pos[2]);
   }, [pos]);
+  useFrame((state) => {
+    const m = meshRef.current;
+    if (m) m.scale.setScalar(screenWorldScale(state.camera, m.position, state.size.height, 8));
+  });
 
   if (!buffer || selection.size === 0) return null;
 
@@ -313,7 +350,7 @@ export function DragMoveHandle({
 
   return (
     <mesh ref={meshRef} position={pos} onPointerDown={startDrag} renderOrder={20000}>
-      <sphereGeometry args={[size, 16, 16]} />
+      <sphereGeometry args={[1, 16, 16]} />
       <meshBasicMaterial color="#ff8800" depthTest={false} transparent opacity={0.85} />
     </mesh>
   );
@@ -324,10 +361,10 @@ export function DragMoveHandle({
  * a gizmo's screen-space ring). onMove fires the net rotation (row-major 3x3)
  * live during the drag; onStart/onEnd bracket it. */
 export function RotateHandle({
-  buffer, selection, onStart, onMove, onEnd, size,
+  buffer, selection, onStart, onMove, onEnd,
 }: {
   buffer: Uint32Array | null; selection: Set<number>;
-  onStart: () => void; onMove: (rowMajor3x3: number[]) => void; onEnd: () => void; size: number;
+  onStart: () => void; onMove: (rowMajor3x3: number[]) => void; onEnd: () => void;
 }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
@@ -340,13 +377,15 @@ export function RotateHandle({
     [buffer, selection],
   );
 
-  // Billboard to face the camera, then apply the live spin around the view axis.
-  useFrame(() => {
+  // Billboard to face the camera, keep a constant on-screen size, then apply the
+  // live spin around the view axis.
+  useFrame((state) => {
     const g = groupRef.current;
     if (!g) return;
     g.position.set(pos[0], pos[1], pos[2]);
     g.quaternion.copy(camera.quaternion);
     g.rotateZ(spinRef.current);
+    g.scale.setScalar(screenWorldScale(state.camera, g.position, state.size.height, 46));
   });
 
   if (!buffer || selection.size === 0) return null;
@@ -388,7 +427,7 @@ export function RotateHandle({
   return (
     <group ref={groupRef} position={pos}>
       <mesh onPointerDown={startDrag} renderOrder={20000}>
-        <torusGeometry args={[size, size * 0.08, 12, 64]} />
+        <torusGeometry args={[1, 0.08, 12, 64]} />
         <meshBasicMaterial color="#33e08a" depthTest={false} transparent opacity={0.85} />
       </mesh>
     </group>

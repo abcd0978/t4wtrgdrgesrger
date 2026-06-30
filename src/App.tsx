@@ -5,10 +5,10 @@ import { DataUtils } from "three";
 import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
-import { type Bounds, computeBounds, radius, selCenter } from "./lib/bounds";
-import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
+import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
+import { rotateCovariance, scaleCovariance, rotationAboutAxis, eigenDecomposeSymmetric3 } from "./lib/mathUtils";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
@@ -22,6 +22,7 @@ const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
+  ["뷰 맞춤 / 자동 뷰", "전체 보기 / 촬영 방향 추정 (상단 버튼)"],
   ["더블클릭", "가우시안 1개 선택"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
@@ -76,9 +77,10 @@ export default function App() {
   const [measureMode, setMeasureMode] = React.useState(false);
   const [measurePts, setMeasurePts] = React.useState<[number, number, number][]>([]);
   const [camDone, setCamDone] = React.useState(false); // first fit / URL view applied
+  const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
-  const viewRef = React.useRef<(() => View) | null>(null);
+  const camApiRef = React.useRef<CameraApi | null>(null);
   const pendingView = React.useRef<View | null>(null);
   const pendingSel = React.useRef<number[] | null>(null);
   const didInit = React.useRef(false);
@@ -343,7 +345,7 @@ export default function App() {
   const measureDist = measurePts.length === 2 ? dist3(measurePts[0], measurePts[1]) : null;
 
   function share() {
-    const v = viewRef.current?.();
+    const v = camApiRef.current?.get();
     const url = buildShareUrl({
       host, run: runId, mode, maxFrames,
       cam: v ?? undefined,
@@ -475,6 +477,59 @@ export default function App() {
   }
 
   const display = liveBuffer ?? displayBuffer;
+
+  // LOD: render only every Nth gaussian when renderFrac < 1 (picking/editing still
+  // use the full buffer via bufferRef, so only the drawn/sorted set shrinks).
+  const lod = React.useMemo(() => {
+    if (!display) return display;
+    const n = display.length / 8;
+    const stride = renderFrac >= 1 ? 1 : Math.max(1, Math.round(1 / renderFrac));
+    if (stride === 1) return display;
+    const m = Math.floor(n / stride);
+    const out = new Uint32Array(m * 8);
+    for (let j = 0; j < m; j++) out.set(display.subarray(j * stride * 8, j * stride * 8 + 8), j * 8);
+    return out;
+  }, [display, renderFrac]);
+
+  // Move the camera to look at the data centre from `dir` (centre -> camera).
+  function setView(dir: [number, number, number]) {
+    if (!bounds || !camApiRef.current) return;
+    const c = center(bounds), D = radius(bounds) * 2.75 + 1;
+    const L = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+    camApiRef.current.apply([c[0] + (dir[0] / L) * D, c[1] + (dir[1] / L) * D, c[2] + (dir[2] / L) * D], c);
+  }
+
+  // Estimate the capture direction: a gaussian's thinnest covariance axis is its
+  // surface normal, and surfaces face the cameras. Average those normals (flipped
+  // to point away from the centroid) -> the side the scene was viewed from.
+  function autoCaptureView() {
+    if (!buffer || !bounds || !camApiRef.current) { return; }
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const slots = buffer.length / 8;
+    const step = Math.max(1, Math.floor(slots / 30000));
+    const c = center(bounds);
+    const cov = [0, 0, 0, 0, 0, 0];
+    const acc = [0, 0, 0];
+    let cnt = 0;
+    for (let i = 0; i < slots; i += step) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
+      const { eigenvalues, eigenvectors } = eigenDecomposeSymmetric3(cov);
+      let mi = 0;
+      if (eigenvalues[1] < eigenvalues[mi]) mi = 1;
+      if (eigenvalues[2] < eigenvalues[mi]) mi = 2;
+      let nx = eigenvectors[mi], ny = eigenvectors[3 + mi], nz = eigenvectors[6 + mi];
+      const px = dv.getFloat32(b, true) - c[0], py = dv.getFloat32(b + 4, true) - c[1], pz = dv.getFloat32(b + 8, true) - c[2];
+      if (nx * px + ny * py + nz * pz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      acc[0] += nx; acc[1] += ny; acc[2] += nz; cnt++;
+    }
+    const L = Math.hypot(acc[0], acc[1], acc[2]);
+    if (cnt === 0 || L < 1e-3) { setView([1, -1, 1]); setStatus("자동 뷰: 추정 실패 → 기본 각도"); return; }
+    setView([acc[0] / L, acc[1] / L, acc[2] / L]);
+    setStatus("자동 뷰 (캡처 방향 추정)");
+  }
+
   const hasTimeline = !!(frameCum && frameCum.length > 1);
   const clipA = Math.min(clipIn, clipOut), clipB = Math.max(clipIn, clipOut);
   const tlPct = (i: number) => (hasTimeline ? (i / (frameCum!.length - 1)) * 100 : 0);
@@ -500,6 +555,8 @@ export default function App() {
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button onClick={showAll}>전체 보기</button>}
+        <button onClick={() => setView([1, -1, 1])} disabled={!bounds} title="전체가 보이도록 카메라 맞춤">뷰 맞춤</button>
+        <button onClick={autoCaptureView} disabled={!buffer} title="가우시안 법선으로 촬영 방향 추정">자동 뷰</button>
         <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
         <button onClick={exportPly} disabled={!buffer}>내보내기</button>
         <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
@@ -514,7 +571,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes }}
+          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView }}
         />
       )}
 
@@ -652,16 +709,16 @@ export default function App() {
         <OrbitControls makeDefault />
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
-        <CameraBridge viewRef={viewRef} />
+        <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (
           <>
-            <DragMoveHandle buffer={buffer} selection={selection} onStart={beginEdit} onMove={liveMove} onEnd={endEdit} size={radius(bounds) * 0.04} />
-            <RotateHandle buffer={buffer} selection={selection} onStart={beginEdit} onMove={liveRotate} onEnd={endEdit} size={radius(bounds) * 0.13} />
+            <DragMoveHandle buffer={buffer} selection={selection} onStart={beginEdit} onMove={liveMove} onEnd={endEdit} />
+            <RotateHandle buffer={buffer} selection={selection} onStart={beginEdit} onMove={liveRotate} onEnd={endEdit} />
           </>
         )}
-        {bounds && measurePts.length > 0 && <MeasureView points={measurePts} size={radius(bounds) * 0.03} />}
+        {measurePts.length > 0 && <MeasureView points={measurePts} />}
         <RenderSettingsContext.Provider value={settings}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
           {display && bounds && (
@@ -669,7 +726,7 @@ export default function App() {
               <FitCamera bounds={bounds} enabled={!camDone && !pendingView.current} onFitted={() => setCamDone(true)} />
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
-                <SplatObject buffer={display} />
+                <SplatObject buffer={lod ?? display} />
               </SplatRenderContext>
             </>
           )}
