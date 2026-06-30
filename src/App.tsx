@@ -537,7 +537,7 @@ export default function App() {
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
         <button className={"menu-only" + (measureMode ? " active" : "")} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
-        {hasTimeline && <button className={"menu-only" + (showTimeline ? " active" : "")} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
+        {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         <button className="menu-only" onClick={exportPly} disabled={!buffer}>내보내기</button>
         <button className="menu-only" onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
         <button className="menu-only" onClick={share} disabled={!buffer}>공유</button>
