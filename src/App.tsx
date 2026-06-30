@@ -72,6 +72,7 @@ export default function App() {
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
   const [moveStep, setMoveStep] = React.useState(0.05);
+  const [rotStep, setRotStep] = React.useState(15); // selection rotation step (deg)
   const [editColor, setEditColor] = React.useState("#ff8800");
   const [editAlpha, setEditAlpha] = React.useState(1);
   const [showStats, setShowStats] = React.useState(false);
@@ -654,11 +655,15 @@ export default function App() {
 
             <hr className="divider" />
             <div className="muted">회전 / 스케일</div>
+            <label className="row muted">각도
+              <input type="range" className="grow" min={1} max={90} step={1} value={rotStep} onChange={(e) => setRotStep(parseInt(e.target.value))} />
+              <span className="num" style={{ width: 36, textAlign: "right" }}>{rotStep}°</span>
+            </label>
             {(["X", "Y", "Z"] as const).map((ax, i) => (
               <div key={ax} className="seg">
                 <span className="axis">{ax}</span>
-                <button onClick={() => rotateSelection(i as 0 | 1 | 2, -15)}>⟲ 15°</button>
-                <button onClick={() => rotateSelection(i as 0 | 1 | 2, 15)}>⟳ 15°</button>
+                <button onClick={() => rotateSelection(i as 0 | 1 | 2, -rotStep)}>⟲</button>
+                <button onClick={() => rotateSelection(i as 0 | 1 | 2, rotStep)}>⟳</button>
               </div>
             ))}
             <div className="seg">
