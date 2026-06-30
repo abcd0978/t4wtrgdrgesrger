@@ -469,29 +469,43 @@ export function KeyboardFly() {
 
   const fwd = React.useMemo(() => new THREE.Vector3(), []);
   const right = React.useMemo(() => new THREE.Vector3(), []);
-  const move = React.useMemo(() => new THREE.Vector3(), []);
+  const pan = React.useMemo(() => new THREE.Vector3(), []);
+  const dirTC = React.useMemo(() => new THREE.Vector3(), []);
   const UP = React.useMemo(() => new THREE.Vector3(0, 0, 1), []);
 
   useFrame((_, delta) => {
     const ks = keys.current;
     if (ks.size === 0 || !controls) return;
+    const dt = Math.min(delta, 0.05);
     camera.getWorldDirection(fwd);
     right.crossVectors(fwd, UP);
     if (right.lengthSq() < 1e-8) right.set(1, 0, 0); // looking straight up/down
     right.normalize();
-    move.set(0, 0, 0);
-    if (ks.has("w") || ks.has("arrowup")) move.add(fwd);
-    if (ks.has("s") || ks.has("arrowdown")) move.addScaledVector(fwd, -1);
-    if (ks.has("d") || ks.has("arrowright")) move.add(right);
-    if (ks.has("a") || ks.has("arrowleft")) move.addScaledVector(right, -1);
-    if (ks.has("e") || ks.has(" ")) move.add(UP);
-    if (ks.has("q")) move.addScaledVector(UP, -1);
-    if (move.lengthSq() === 0) return;
     const dist = camera.position.distanceTo(controls.target);
-    const speed = Math.max(dist * 0.8, 0.5) * (ks.has("shift") ? 3 : 1);
-    move.normalize().multiplyScalar(speed * Math.min(delta, 0.05));
-    camera.position.add(move);
-    controls.target.add(move);
+    const stepLen = Math.max(dist * 0.8, 0.5) * (ks.has("shift") ? 3 : 1) * dt;
+
+    // Strafe + vertical = pan: move camera and target together (distance kept).
+    pan.set(0, 0, 0);
+    if (ks.has("d") || ks.has("arrowright")) pan.add(right);
+    if (ks.has("a") || ks.has("arrowleft")) pan.addScaledVector(right, -1);
+    if (ks.has("e") || ks.has(" ")) pan.add(UP);
+    if (ks.has("q")) pan.addScaledVector(UP, -1);
+    if (pan.lengthSq() > 0) {
+      pan.normalize().multiplyScalar(stepLen);
+      camera.position.add(pan);
+      controls.target.add(pan);
+    }
+
+    // Forward/back = dolly toward/away from the target, exactly like wheel zoom:
+    // camera-only, so the distance (and thus the speed) shrinks as you approach.
+    let f = 0;
+    if (ks.has("w") || ks.has("arrowup")) f += 1;
+    if (ks.has("s") || ks.has("arrowdown")) f -= 1;
+    if (f !== 0 && dist > 1e-6) {
+      const newDist = Math.max(1e-4, dist - f * stepLen);
+      dirTC.copy(camera.position).sub(controls.target).normalize();
+      camera.position.copy(controls.target).addScaledVector(dirTC, newDist);
+    }
     controls.update();
   });
   return null;
