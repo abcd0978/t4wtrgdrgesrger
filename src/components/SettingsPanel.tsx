@@ -24,7 +24,6 @@ export interface SceneOpts {
   grid: GridOpts; setGrid: React.Dispatch<React.SetStateAction<GridOpts>>;
   dpr: number; setDpr: (v: number) => void;
   showAxes: boolean; setShowAxes: (v: boolean) => void;
-  showScaleBar: boolean; setShowScaleBar: (v: boolean) => void;
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
   cameraToOrigin: () => void;
@@ -42,7 +41,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, showScaleBar, setShowScaleBar, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark } = scene;
+  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark } = scene;
   return (
     <div className="scroll" style={{
       position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
@@ -74,7 +73,6 @@ export function SettingsPanel({
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)</label>
-      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showScaleBar} onChange={(e) => setShowScaleBar(e.target.checked)} /> 스케일 바</label>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
 
       <b>성능 (LOD)</b>
