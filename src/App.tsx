@@ -8,7 +8,7 @@ import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, radius, selCenter } from "./lib/bounds";
 import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
@@ -23,7 +23,8 @@ const HELP = [
   ["스크롤", "확대 / 축소"],
   ["더블클릭", "가우시안 1개 선택"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
-  ["주황 핸들 드래그", "선택한 것 이동"],
+  ["주황 구 드래그", "선택 이동 (실시간)"],
+  ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
   ["왼쪽 패널", "이동·회전·스케일·색·복제·숨기기·격리·삭제"],
   ["측정 버튼", "두 점 더블클릭 → 실측 거리"],
   ["타임라인 (delta)", "▶ 재생 · 속도 · 구간 지정 → 구간 .ply"],
@@ -81,6 +82,10 @@ export default function App() {
   const pendingSel = React.useRef<number[] | null>(null);
   const didInit = React.useRef(false);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
+  const editOrigin = React.useRef<Uint32Array | null>(null); // buffer snapshot at drag start
+  const workBuf = React.useRef<Uint32Array | null>(null);     // live-edited copy during a drag
+  const editCenter = React.useRef<[number, number, number]>([0, 0, 0]);
+  const editMoved = React.useRef(false);
   const bufferRef = React.useRef<Uint32Array | null>(null);
   const selectionRef = React.useRef<Set<number>>(selection);
   selectionRef.current = selection;
@@ -199,6 +204,53 @@ export default function App() {
     }, `moved ${selection.size} gaussians`);
   }
 
+  // --- live handle drag (move / rotate): show the transform in real time ---
+  // beginEdit snapshots the buffer; each liveTransform re-derives the selection
+  // from that snapshot by the net transform and pushes a preview via liveBuffer
+  // (only the selected gaussians are rewritten, so it's cheap on big buffers);
+  // endEdit promotes the preview to the real buffer. One undo entry per drag.
+  function beginEdit() {
+    if (!buffer || selection.size === 0) return;
+    editOrigin.current = buffer;
+    workBuf.current = buffer.slice();
+    editCenter.current = selCenter(buffer, selection);
+    editMoved.current = false;
+  }
+  function liveTransform(mutate: (odv: DataView, wdv: DataView, base: number, c: [number, number, number]) => void, msg: string) {
+    const orig = editOrigin.current, work = workBuf.current;
+    if (!orig || !work) return;
+    if (!editMoved.current) { editMoved.current = true; setUndoStack((s) => [...s.slice(-29), orig]); }
+    const odv = new DataView(orig.buffer, orig.byteOffset, orig.byteLength);
+    const wdv = new DataView(work.buffer);
+    for (const i of selection) mutate(odv, wdv, i * 32, editCenter.current);
+    setLiveBuffer(work.subarray());
+    setStatus(msg);
+  }
+  function endEdit() {
+    if (editMoved.current && workBuf.current) { setBuffer(workBuf.current); setStatus(`edited ${selection.size} gaussians`); }
+    setLiveBuffer(null);
+    editOrigin.current = null; workBuf.current = null; editMoved.current = false;
+  }
+  function liveMove(dx: number, dy: number, dz: number) {
+    liveTransform((odv, wdv, b) => {
+      wdv.setFloat32(b, odv.getFloat32(b, true) + dx, true);
+      wdv.setFloat32(b + 4, odv.getFloat32(b + 4, true) + dy, true);
+      wdv.setFloat32(b + 8, odv.getFloat32(b + 8, true) + dz, true);
+    }, `moving ${selection.size}…`);
+  }
+  function liveRotate(R: number[]) {
+    const cov = [0, 0, 0, 0, 0, 0];
+    liveTransform((odv, wdv, b, c) => {
+      const px = odv.getFloat32(b, true) - c[0], py = odv.getFloat32(b + 4, true) - c[1], pz = odv.getFloat32(b + 8, true) - c[2];
+      wdv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
+      wdv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
+      wdv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
+      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(odv.getUint16(b + 16 + k * 2, true));
+      const rc = rotateCovariance(cov, R);
+      for (let k = 0; k < 6; k++) wdv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
+    }, `rotating ${selection.size}…`);
+  }
+
   // Delete = set alpha 0 (the existing "empty slot" sentinel: skipped by render,
   // picking, bounds, and export). Reversible via undo; baked in on export.
   function deleteSelection() {
@@ -219,10 +271,10 @@ export default function App() {
 
   // Rotate / scale the selection about its centroid: positions move, and the
   // covariance transforms with it (Σ' = R Σ Rᵀ / diag(s) Σ diag(s)).
-  function rotateSelection(axis: 0 | 1 | 2, deg: number) {
+  // applyRotation takes a row-major 3x3 and commits once (used by the +/- buttons).
+  function applyRotation(R: number[]) {
     if (!buffer || selection.size === 0) return;
     const c = selCenter(buffer, selection);
-    const R = rotationAboutAxis(axis, (deg * Math.PI) / 180);
     const cov = [0, 0, 0, 0, 0, 0];
     commitEdit((dv, b) => {
       const px = dv.getFloat32(b, true) - c[0], py = dv.getFloat32(b + 4, true) - c[1], pz = dv.getFloat32(b + 8, true) - c[2];
@@ -233,6 +285,9 @@ export default function App() {
       const rc = rotateCovariance(cov, R);
       for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
     }, `rotated ${selection.size} gaussians`);
+  }
+  function rotateSelection(axis: 0 | 1 | 2, deg: number) {
+    applyRotation(rotationAboutAxis(axis, (deg * Math.PI) / 180));
   }
 
   function scaleSelection(f: number) {
@@ -576,7 +631,10 @@ export default function App() {
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (
-          <DragMoveHandle buffer={buffer} selection={selection} onCommit={moveSelection} size={radius(bounds) * 0.04} />
+          <>
+            <DragMoveHandle buffer={buffer} selection={selection} onStart={beginEdit} onMove={liveMove} onEnd={endEdit} size={radius(bounds) * 0.04} />
+            <RotateHandle buffer={buffer} selection={selection} onStart={beginEdit} onMove={liveRotate} onEnd={endEdit} size={radius(bounds) * 0.13} />
+          </>
         )}
         {bounds && measurePts.length > 0 && <MeasureView points={measurePts} size={radius(bounds) * 0.03} />}
         <RenderSettingsContext.Provider value={settings}>

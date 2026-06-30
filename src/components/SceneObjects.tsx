@@ -1,6 +1,6 @@
 import React from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
+import { useThree, useFrame } from "@react-three/fiber";
 import { type Bounds, center, radius, selCenter } from "../lib/bounds";
 
 export interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
@@ -244,12 +244,13 @@ export function CanvasCapture({
 
 /** Drag handle (sphere) at the selection centroid. Drag = move along the camera
  * plane. Built directly (raycast -> plane) because TransformControls' translate
- * is broken in this stack. The handle moves live; gaussians commit on release. */
+ * is broken in this stack. onMove fires the running net delta live during the
+ * drag; onStart/onEnd bracket it (snapshot for undo / finalize). */
 export function DragMoveHandle({
-  buffer, selection, onCommit, size,
+  buffer, selection, onStart, onMove, onEnd, size,
 }: {
   buffer: Uint32Array | null; selection: Set<number>;
-  onCommit: (dx: number, dy: number, dz: number) => void; size: number;
+  onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void; size: number;
 }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
@@ -269,6 +270,7 @@ export function DragMoveHandle({
   function startDrag(e: { stopPropagation: () => void }) {
     e.stopPropagation();
     if (controls) controls.enabled = false;
+    onStart();
     const plane = new THREE.Plane();
     const n = new THREE.Vector3();
     camera.getWorldDirection(n);
@@ -287,7 +289,7 @@ export function DragMoveHandle({
       ray.setFromCamera(ndc, camera);
       return ray.ray.intersectPlane(plane, out) !== null;
     };
-    const onMove = (ev: PointerEvent) => {
+    const onPM = (ev: PointerEvent) => {
       if (!meshRef.current) return;
       if (!started) { if (castTo(ev, last)) started = true; return; }
       if (!castTo(ev, hit)) return;
@@ -296,16 +298,17 @@ export function DragMoveHandle({
       meshRef.current.position.y += dy;
       meshRef.current.position.z += dz;
       total.x += dx; total.y += dy; total.z += dz;
+      onMove(total.x, total.y, total.z); // live, net from drag start
       last.copy(hit);
     };
-    const onUp = () => {
+    const onPU = () => {
       if (controls) controls.enabled = true;
-      onCommit(total.x, total.y, total.z);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      onEnd();
+      window.removeEventListener("pointermove", onPM);
+      window.removeEventListener("pointerup", onPU);
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointermove", onPM);
+    window.addEventListener("pointerup", onPU);
   }
 
   return (
@@ -313,5 +316,81 @@ export function DragMoveHandle({
       <sphereGeometry args={[size, 16, 16]} />
       <meshBasicMaterial color="#ff8800" depthTest={false} transparent opacity={0.85} />
     </mesh>
+  );
+}
+
+/** Rotate ring at the selection centroid. Always billboards to face the camera,
+ * so dragging it around the centre spins the selection about the view axis (like
+ * a gizmo's screen-space ring). onMove fires the net rotation (row-major 3x3)
+ * live during the drag; onStart/onEnd bracket it. */
+export function RotateHandle({
+  buffer, selection, onStart, onMove, onEnd, size,
+}: {
+  buffer: Uint32Array | null; selection: Set<number>;
+  onStart: () => void; onMove: (rowMajor3x3: number[]) => void; onEnd: () => void; size: number;
+}) {
+  const camera = useThree((s) => s.camera);
+  const gl = useThree((s) => s.gl);
+  const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
+  const groupRef = React.useRef<THREE.Group>(null);
+  const spinRef = React.useRef(0); // live drag angle (ring visual)
+
+  const pos = React.useMemo<[number, number, number]>(
+    () => (buffer && selection.size > 0 ? selCenter(buffer, selection) : [0, 0, 0]),
+    [buffer, selection],
+  );
+
+  // Billboard to face the camera, then apply the live spin around the view axis.
+  useFrame(() => {
+    const g = groupRef.current;
+    if (!g) return;
+    g.position.set(pos[0], pos[1], pos[2]);
+    g.quaternion.copy(camera.quaternion);
+    g.rotateZ(spinRef.current);
+  });
+
+  if (!buffer || selection.size === 0) return null;
+
+  function startDrag(e: { stopPropagation: () => void }) {
+    e.stopPropagation();
+    if (controls) controls.enabled = false;
+    onStart();
+    const c = new THREE.Vector3(pos[0], pos[1], pos[2]);
+    const cN = c.clone().project(camera); // centroid in NDC
+    const axis = camera.position.clone().sub(c).normalize(); // toward camera
+    const rect = gl.domElement.getBoundingClientRect();
+    const m = new THREE.Matrix4();
+    const angleAt = (ev: PointerEvent) => {
+      const mx = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      const my = -(((ev.clientY - rect.top) / rect.height) * 2 - 1); // NDC y-up
+      return Math.atan2(my - cN.y, mx - cN.x);
+    };
+    let start: number | null = null;
+    const onPM = (ev: PointerEvent) => {
+      const a = angleAt(ev);
+      if (start === null) { start = a; return; }
+      const delta = a - start;
+      spinRef.current = delta;
+      const e2 = m.makeRotationAxis(axis, delta).elements; // column-major
+      onMove([e2[0], e2[4], e2[8], e2[1], e2[5], e2[9], e2[2], e2[6], e2[10]]); // live, net
+    };
+    const onPU = () => {
+      if (controls) controls.enabled = true;
+      spinRef.current = 0;
+      onEnd();
+      window.removeEventListener("pointermove", onPM);
+      window.removeEventListener("pointerup", onPU);
+    };
+    window.addEventListener("pointermove", onPM);
+    window.addEventListener("pointerup", onPU);
+  }
+
+  return (
+    <group ref={groupRef} position={pos}>
+      <mesh onPointerDown={startDrag} renderOrder={20000}>
+        <torusGeometry args={[size, size * 0.08, 12, 64]} />
+        <meshBasicMaterial color="#33e08a" depthTest={false} transparent opacity={0.85} />
+      </mesh>
+    </group>
   );
 }
