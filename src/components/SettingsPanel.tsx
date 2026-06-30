@@ -38,8 +38,8 @@ export function SettingsPanel({
 }) {
   const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin } = scene;
   return (
-    <div style={{
-      position: "absolute", zIndex: 3, top: 46, right: 8, width: 280,
+    <div className="scroll" style={{
+      position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
       display: "flex", flexDirection: "column", gap: 6, padding: 10,
       background: "rgba(0,0,0,0.78)", color: "#fff", font: "14px monospace", borderRadius: 6,
       maxHeight: "85vh", overflowY: "auto",
