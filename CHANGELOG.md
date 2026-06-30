@@ -1,5 +1,9 @@
 # 변경 내역 (Changelog)
 
+## 재생 속도 자유 조절 (드래그)
+
+- 고정 프리셋(2/5/10/20/30fps)을 없애고, fps 컨트롤을 **좌우 드래그로 자유 조절**(0.2fps/px, 0.5 단위, 0.5–60fps). 조금 드래그하면 조금, 많이 드래그하면 많이 변경. 0.5fps(프레임당 2초) 같은 저속 재생도 가능.
+
 ## PLY 불러오기 + 타임라인 구간 UX 개편
 
 - **PLY 열기** — 로컬 `.ply` 파일을 뷰어로 직접 로드(서버 불필요). `parsePly`가 표준 3DGS binary PLY 파싱 → `covarianceFromScaleRotation`+`packSplats`로 패킹(내보내기의 역). f_dc/opacity/scale/rot 활성화 처리, 색만 있는 포인트 클라우드는 red/green/blue + 작은 등방성 스케일로 폴백.

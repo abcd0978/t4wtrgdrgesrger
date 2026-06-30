@@ -16,7 +16,7 @@ import { readUrlState, buildShareUrl } from "./lib/urlState";
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
 type View = { p: [number, number, number]; t: [number, number, number] };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-const SPEEDS = [2, 5, 10, 20, 30]; // timeline playback fps presets
+const FPS_MIN = 0.5, FPS_MAX = 60;
 
 const HELP = [
   ["드래그", "카메라 회전"],
@@ -333,7 +333,7 @@ export default function App() {
   React.useEffect(() => {
     if (!playing || !frameCum) return;
     const a = Math.min(clipIn, clipOut), b = Math.max(clipIn, clipOut);
-    const id = setInterval(() => setFrameIdx((i) => (i >= b ? a : i + 1)), 1000 / Math.max(1, fps));
+    const id = setInterval(() => setFrameIdx((i) => (i >= b ? a : i + 1)), 1000 / Math.max(0.1, fps));
     return () => clearInterval(id);
   }, [playing, fps, clipIn, clipOut, frameCum]);
 
@@ -346,6 +346,23 @@ export default function App() {
     if (hi <= lo) return;
     downloadBlob(packedToPly(buffer.subarray(lo * 8, hi * 8)), `${runId || "gaussians"}_f${a}-${b}.ply`);
     setStatus(`exported frames ${a}–${b} → ${hi - lo} gaussians (.ply)`);
+  }
+
+  // Drag the fps control left/right to change playback speed freely: the further
+  // you drag, the bigger the change (0.2 fps per pixel, 0.5-step, clamped).
+  function startFpsDrag(e: React.PointerEvent) {
+    e.preventDefault();
+    const startX = e.clientX, startFps = fps;
+    const onMove = (ev: PointerEvent) => {
+      const next = startFps + (ev.clientX - startX) * 0.2;
+      setFps(Math.min(FPS_MAX, Math.max(FPS_MIN, Math.round(next * 2) / 2)));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   const stats = React.useMemo(() => {
@@ -517,7 +534,7 @@ export default function App() {
             </div>
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               <button className={playing ? "active icon" : "icon"} onClick={() => setPlaying((p) => !p)} title="재생 / 일시정지">{playing ? "⏸" : "▶"}</button>
-              <button className="ghost" style={{ minWidth: 58 }} onClick={() => setFps((f) => SPEEDS[(SPEEDS.indexOf(f) + 1) % SPEEDS.length])} title="재생 속도">{fps}fps</button>
+              <button className="ghost num" style={{ minWidth: 92, cursor: "ew-resize", touchAction: "none", userSelect: "none" }} onPointerDown={startFpsDrag} title="좌우로 드래그해서 재생 속도 조절">⇄ {Number.isInteger(fps) ? fps : fps.toFixed(1)} fps</button>
               <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum!.length}</span>
               <span className="grow" />
               <button onClick={() => setClipIn(frameIdx)} title="현재 프레임을 구간 시작으로">구간 시작</button>
