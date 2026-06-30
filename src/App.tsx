@@ -6,7 +6,7 @@ import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
-import { rotateCovariance, scaleCovariance, rotationAboutAxis, eigenDecomposeSymmetric3 } from "./lib/mathUtils";
+import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -22,7 +22,6 @@ const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
-  ["뷰 맞춤 / 자동 뷰", "전체 보기 / 촬영 방향 추정 (상단 버튼)"],
   ["더블클릭", "가우시안 1개 선택"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
@@ -499,37 +498,6 @@ export default function App() {
     camApiRef.current.apply([c[0] + (dir[0] / L) * D, c[1] + (dir[1] / L) * D, c[2] + (dir[2] / L) * D], c);
   }
 
-  // Estimate the capture direction: a gaussian's thinnest covariance axis is its
-  // surface normal, and surfaces face the cameras. Average those normals (flipped
-  // to point away from the centroid) -> the side the scene was viewed from.
-  function autoCaptureView() {
-    if (!buffer || !bounds || !camApiRef.current) { return; }
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    const slots = buffer.length / 8;
-    const step = Math.max(1, Math.floor(slots / 30000));
-    const c = center(bounds);
-    const cov = [0, 0, 0, 0, 0, 0];
-    const acc = [0, 0, 0];
-    let cnt = 0;
-    for (let i = 0; i < slots; i += step) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
-      const { eigenvalues, eigenvectors } = eigenDecomposeSymmetric3(cov);
-      let mi = 0;
-      if (eigenvalues[1] < eigenvalues[mi]) mi = 1;
-      if (eigenvalues[2] < eigenvalues[mi]) mi = 2;
-      let nx = eigenvectors[mi], ny = eigenvectors[3 + mi], nz = eigenvectors[6 + mi];
-      const px = dv.getFloat32(b, true) - c[0], py = dv.getFloat32(b + 4, true) - c[1], pz = dv.getFloat32(b + 8, true) - c[2];
-      if (nx * px + ny * py + nz * pz < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      acc[0] += nx; acc[1] += ny; acc[2] += nz; cnt++;
-    }
-    const L = Math.hypot(acc[0], acc[1], acc[2]);
-    if (cnt === 0 || L < 1e-3) { setView([1, -1, 1]); setStatus("자동 뷰: 추정 실패 → 기본 각도"); return; }
-    setView([acc[0] / L, acc[1] / L, acc[2] / L]);
-    setStatus("자동 뷰 (캡처 방향 추정)");
-  }
-
   const hasTimeline = !!(frameCum && frameCum.length > 1);
   const clipA = Math.min(clipIn, clipOut), clipB = Math.max(clipIn, clipOut);
   const tlPct = (i: number) => (hasTimeline ? (i / (frameCum!.length - 1)) * 100 : 0);
@@ -555,8 +523,6 @@ export default function App() {
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button onClick={showAll}>전체 보기</button>}
-        <button onClick={() => setView([1, -1, 1])} disabled={!bounds} title="전체가 보이도록 카메라 맞춤">뷰 맞춤</button>
-        <button onClick={autoCaptureView} disabled={!buffer} title="가우시안 법선으로 촬영 방향 추정">자동 뷰</button>
         <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
         <button onClick={exportPly} disabled={!buffer}>내보내기</button>
         <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
