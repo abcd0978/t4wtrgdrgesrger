@@ -258,6 +258,17 @@ function SplatRendererImpl() {
       oldProps.material.dispose();
       oldProps.textureT_camera_groups.dispose();
 
+      // Seed identity draw order so every Gaussian is visible immediately. The
+      // new sortedIndex attribute is all-zeros otherwise, which collapses every
+      // instance onto Gaussian 0 until the worker re-sorts — and the worker only
+      // re-sorts on camera movement, so without this a size change with a still
+      // camera (e.g. changing the LOD slider) makes everything vanish.
+      {
+        const idx = meshPropsRef.current.sortedIndexAttribute.array as Uint32Array;
+        for (let i = 0; i < merged.numGaussians; i++) idx[i] = i;
+        meshPropsRef.current.sortedIndexAttribute.needsUpdate = true;
+      }
+
       // Update worker with new buffer.
       postToWorker({
         updateBuffer: merged.gaussianBuffer,
