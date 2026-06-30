@@ -151,10 +151,13 @@ input[type="range"].timeline::-moz-range-thumb {
 .scroll::-webkit-scrollbar-thumb, .panel::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 8px; }
 .scroll::-webkit-scrollbar-track, .panel::-webkit-scrollbar-track { background: transparent; }
 
-/* hamburger toggle: only on phones; the rest of the toolbar collapses behind it */
-.hamburger { background: rgba(255, 139, 61, 0.82); border-color: transparent; color: #1a1205; font-weight: 700; }
-@media (min-width: 641px) { .hamburger { display: none; } }
-@media (max-width: 640px) { .toolbar.collapsed .menu-only { display: none; } }
+/* hamburger toggle: phones + touch tablets collapse the toolbar behind it;
+ * mouse/desktop (fine pointer or wide) shows the full toolbar. */
+.hamburger { display: none; background: rgba(255, 139, 61, 0.82); border-color: transparent; color: #1a1205; font-weight: 700; }
+@media (max-width: 640px), (pointer: coarse) and (max-width: 1366px) {
+  .hamburger { display: inline-block; }
+  .toolbar.collapsed .menu-only { display: none; }
+}
 
 /* --- responsive: narrow / phone screens --- */
 @media (max-width: 640px) {
