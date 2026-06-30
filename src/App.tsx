@@ -315,6 +315,32 @@ export default function App() {
     applyRotation(rotationAboutAxis(axis, (deg * Math.PI) / 180));
   }
 
+  // Rotate the WHOLE scene about its bounds centre (for fixing a tilted capture).
+  // Selection-independent; transforms every gaussian's position + covariance.
+  function rotateScene(axis: 0 | 1 | 2, deg: number) {
+    if (!buffer || !bounds) return;
+    const c = center(bounds);
+    const R = rotationAboutAxis(axis, (deg * Math.PI) / 180);
+    setUndoStack((s) => [...s.slice(-29), buffer]);
+    const nb = buffer.slice();
+    const dv = new DataView(nb.buffer);
+    const slots = nb.length / 8;
+    const cov = [0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue; // skip empty/deleted slots
+      const px = dv.getFloat32(b, true) - c[0], py = dv.getFloat32(b + 4, true) - c[1], pz = dv.getFloat32(b + 8, true) - c[2];
+      dv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
+      dv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
+      dv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
+      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
+      const rc = rotateCovariance(cov, R);
+      for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
+    }
+    setBuffer(nb); setBounds(computeBounds(nb));
+    setStatus(`scene rotated ${deg}° (${axis === 0 ? "X" : axis === 1 ? "Y" : "Z"})`);
+  }
+
   function scaleSelection(f: number) {
     if (!buffer || selection.size === 0) return;
     const c = selCenter(buffer, selection);
@@ -585,7 +611,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark }}
+          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -724,7 +750,7 @@ export default function App() {
 
       <Canvas dpr={dpr} gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
-        <OrbitControls makeDefault />
+        <OrbitControls makeDefault enableDamping={false} />
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />

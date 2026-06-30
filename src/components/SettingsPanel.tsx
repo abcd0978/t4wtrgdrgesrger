@@ -31,6 +31,7 @@ export interface SceneOpts {
   saveBookmark: () => void;
   restoreBookmark: (i: number) => void;
   deleteBookmark: (i: number) => void;
+  rotateScene: (axis: 0 | 1 | 2, deg: number) => void;
 }
 
 export function SettingsPanel({
@@ -41,7 +42,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark } = scene;
+  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene } = scene;
   return (
     <div className="scroll" style={{
       position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
@@ -95,6 +96,15 @@ export function SettingsPanel({
         <div key={i} style={{ display: "flex", gap: 6 }}>
           <button style={{ flex: 1 }} onClick={() => restoreBookmark(i)}>북마크 {i + 1}</button>
           <button className="ghost icon" onClick={() => deleteBookmark(i)} title="삭제">✕</button>
+        </div>
+      ))}
+
+      <b>씬 회전 (기울기 보정)</b>
+      {(["X", "Y", "Z"] as const).map((ax, i) => (
+        <div key={ax} className="seg">
+          <span className="axis">{ax}</span>
+          <button onClick={() => rotateScene(i as 0 | 1 | 2, -5)}>⟲ 5°</button>
+          <button onClick={() => rotateScene(i as 0 | 1 | 2, 5)}>⟳ 5°</button>
         </div>
       ))}
 
