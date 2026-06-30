@@ -434,6 +434,20 @@ export function RotateHandle({
   );
 }
 
+/** Scale OrbitControls rotate speed by zoom: when the camera is close (small
+ * orbit radius) a small drag would otherwise swing the nearby view wildly, so
+ * slow rotation down as you zoom in (full speed at/beyond the default framing). */
+export function AdaptiveRotateSpeed({ sceneRadius }: { sceneRadius: number }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number } | null;
+  useFrame(() => {
+    if (!controls) return;
+    const dist = camera.position.distanceTo(controls.target);
+    controls.rotateSpeed = Math.min(1, Math.max(0.1, dist / (sceneRadius || 1)));
+  });
+  return null;
+}
+
 /** WASD / arrow-key fly: translate camera + orbit target together so it reads as
  * moving through the scene. Speed scales with the orbit distance (so it works at
  * any zoom); Shift = faster, Q/E (or Space) = down/up along world-up (z). */
