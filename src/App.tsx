@@ -64,6 +64,9 @@ export default function App() {
   const [showTimeline, setShowTimeline] = React.useState(true);
   const [showScaleBar, setShowScaleBar] = React.useState(true);
   const [worldPerPx, setWorldPerPx] = React.useState(0);
+  const [bookmarks, setBookmarks] = React.useState<View[]>(() => {
+    try { return JSON.parse(lsGet("bookmarks", "[]")); } catch { return []; }
+  });
   const [bg, setBg] = React.useState("#ffffff");
   const [showGrid, setShowGrid] = React.useState(true);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
@@ -118,6 +121,10 @@ export default function App() {
       localStorage.setItem(LS + "maxFrames", maxFrames);
     } catch { /* storage unavailable (private mode) */ }
   }, [host, runId, mode, maxFrames]);
+
+  React.useEffect(() => {
+    try { localStorage.setItem(LS + "bookmarks", JSON.stringify(bookmarks)); } catch { /* ignore */ }
+  }, [bookmarks]);
 
   async function load(over?: Partial<{ host: string; runId: string; mode: "snapshot" | "delta"; maxFrames: string }>) {
     const _host = over?.host ?? host, _run = over?.runId ?? runId;
@@ -523,6 +530,19 @@ export default function App() {
     camApiRef.current.apply([c[0] + (dir[0] / L) * D, c[1] + (dir[1] / L) * D, c[2] + (dir[2] / L) * D], c);
   }
 
+  // Camera bookmarks: save / restore / delete the current view (persisted).
+  function saveBookmark() {
+    const v = camApiRef.current?.get();
+    if (v) { setBookmarks((b) => [...b, v]); setStatus("북마크 저장됨"); }
+  }
+  function restoreBookmark(i: number) {
+    const v = bookmarks[i];
+    if (v) camApiRef.current?.apply(v.p, v.t);
+  }
+  function deleteBookmark(i: number) {
+    setBookmarks((b) => b.filter((_, j) => j !== i));
+  }
+
   // Put the camera at the world origin (where the axes gizmo sits — usually the
   // capture/reference origin), looking at the data centre.
   function cameraToOrigin() {
@@ -577,7 +597,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, showScaleBar, setShowScaleBar, renderFrac, setRenderFrac, setView, cameraToOrigin }}
+          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, showScaleBar, setShowScaleBar, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark }}
           onClose={() => setShowPanel(false)}
         />
       )}

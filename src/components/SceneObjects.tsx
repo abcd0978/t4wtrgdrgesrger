@@ -385,7 +385,7 @@ export function RotateHandle({
     g.position.set(pos[0], pos[1], pos[2]);
     g.quaternion.copy(camera.quaternion);
     g.rotateZ(spinRef.current);
-    g.scale.setScalar(screenWorldScale(state.camera, g.position, state.size.height, 46));
+    g.scale.setScalar(screenWorldScale(state.camera, g.position, state.size.height, 54));
   });
 
   if (!buffer || selection.size === 0) return null;
@@ -427,7 +427,7 @@ export function RotateHandle({
   return (
     <group ref={groupRef} position={pos}>
       <mesh onPointerDown={startDrag} renderOrder={20000}>
-        <torusGeometry args={[1, 0.08, 12, 64]} />
+        <torusGeometry args={[1, 0.18, 16, 64]} />
         <meshBasicMaterial color="#33e08a" depthTest={false} transparent opacity={0.85} />
       </mesh>
     </group>
