@@ -138,6 +138,23 @@ export function InputController({
   return null;
 }
 
+/** Exposes a canvas->PNG capture fn via captureRef (needs `gl`, so lives inside
+ * Canvas). Canvas must use preserveDrawingBuffer or toBlob comes back blank. */
+export function CanvasCapture({
+  captureRef, download,
+}: {
+  captureRef: React.MutableRefObject<((name: string) => void) | null>;
+  download: (blob: Blob, name: string) => void;
+}) {
+  const gl = useThree((s) => s.gl);
+  React.useEffect(() => {
+    captureRef.current = (name) =>
+      gl.domElement.toBlob((b) => { if (b) download(b, name); }, "image/png");
+    return () => { captureRef.current = null; };
+  }, [gl, download]);
+  return null;
+}
+
 /** Drag handle (sphere) at the selection centroid. Drag = move along the camera
  * plane. Built directly (raycast -> plane) because TransformControls' translate
  * is broken in this stack. The handle moves live; gaussians commit on release. */

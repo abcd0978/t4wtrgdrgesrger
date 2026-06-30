@@ -6,15 +6,18 @@ import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } fro
 import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, radius } from "./lib/bounds";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, DashedGrid, InputController, DragMoveHandle, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, DashedGrid, InputController, DragMoveHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { packedToPly } from "./lib/ply";
 
 const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
   ["더블클릭", "가우시안 1개 선택"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
-  ["기즈모 화살표", "선택한 것 이동"],
+  ["주황 핸들 드래그", "선택한 것 이동"],
+  ["삭제 / 색·불투명도", "선택 후 왼쪽 패널"],
+  ["내보내기 / 스크린샷", "상단 버튼 (.ply / .png)"],
   ["undo / reset", "되돌리기 / 처음으로"],
   ["⚙ 버튼", "렌더 설정 열기"],
 ];
@@ -47,6 +50,10 @@ export default function App() {
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
   const [moveStep, setMoveStep] = React.useState(0.05);
+  const [editColor, setEditColor] = React.useState("#ff8800");
+  const [editAlpha, setEditAlpha] = React.useState(1);
+  const [showStats, setShowStats] = React.useState(false);
+  const captureRef = React.useRef<((name: string) => void) | null>(null);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
   const dragWork = React.useRef<{ color: Uint32Array; snap: Uint32Array } | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
@@ -101,23 +108,71 @@ export default function App() {
     return hb;
   }, [buffer, selection]);
 
-  // Apply the gizmo's net move on release (delta = end - start). Only touch the
-  // buffer / remount when something actually moved, so plain clicks are free.
-  function moveSelection(dx: number, dy: number, dz: number) {
-    if (!buffer || selection.size === 0 || (!dx && !dy && !dz)) return;
+  // One edit primitive for move/delete/recolor: snapshot for undo, copy, mutate
+  // the selected gaussians, swap the ref. Same length -> renderer updates the
+  // texture in place (no remount, no bounds re-scan): keeps edits snappy.
+  function commitEdit(mutate: (dv: DataView, base: number) => void, msg: string) {
+    if (!buffer || selection.size === 0) return;
     setUndoStack((s) => [...s.slice(-29), buffer]);
     const nb = buffer.slice();
     const dv = new DataView(nb.buffer);
-    for (const i of selection) {
-      dv.setFloat32(i * 32, dv.getFloat32(i * 32, true) + dx, true);
-      dv.setFloat32(i * 32 + 4, dv.getFloat32(i * 32 + 4, true) + dy, true);
-      dv.setFloat32(i * 32 + 8, dv.getFloat32(i * 32 + 8, true) + dz, true);
-    }
-    // new ref, same size -> renderer updates the texture in place (no remount, no
-    // bounds re-scan): keeps moves snappy.
+    for (const i of selection) mutate(dv, i * 32);
     setBuffer(nb);
-    setStatus(`moved ${selection.size} gaussians`);
+    setStatus(msg);
   }
+
+  // Net move on release (delta = end - start). No-op moves stay free.
+  function moveSelection(dx: number, dy: number, dz: number) {
+    if (!dx && !dy && !dz) return;
+    commitEdit((dv, b) => {
+      dv.setFloat32(b, dv.getFloat32(b, true) + dx, true);
+      dv.setFloat32(b + 4, dv.getFloat32(b + 4, true) + dy, true);
+      dv.setFloat32(b + 8, dv.getFloat32(b + 8, true) + dz, true);
+    }, `moved ${selection.size} gaussians`);
+  }
+
+  // Delete = set alpha 0 (the existing "empty slot" sentinel: skipped by render,
+  // picking, bounds, and export). Reversible via undo; baked in on export.
+  function deleteSelection() {
+    const n = selection.size;
+    commitEdit((dv, b) => dv.setUint8(b + 31, 0), `deleted ${n} gaussians`);
+    setSelection(new Set());
+  }
+
+  function applyColorOpacity() {
+    const r = parseInt(editColor.slice(1, 3), 16);
+    const g = parseInt(editColor.slice(3, 5), 16);
+    const bl = parseInt(editColor.slice(5, 7), 16);
+    const a = Math.round(editAlpha * 255);
+    commitEdit((dv, b) => {
+      dv.setUint8(b + 28, r); dv.setUint8(b + 29, g); dv.setUint8(b + 30, bl); dv.setUint8(b + 31, a);
+    }, `recolored ${selection.size} gaussians`);
+  }
+
+  const downloadBlob = React.useCallback((blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  function exportPly() {
+    if (!buffer) return;
+    downloadBlob(packedToPly(buffer), `${runId || "gaussians"}.ply`);
+    setStatus("exported .ply");
+  }
+
+  const stats = React.useMemo(() => {
+    if (!buffer || !bounds) return null;
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const slots = buffer.length / 8;
+    let live = 0;
+    for (let i = 0; i < slots; i++) if (dv.getUint8(i * 32 + 31) !== 0) live++;
+    return {
+      live, slots, mb: buffer.byteLength / 1048576,
+      size: [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]] as const,
+    };
+  }, [buffer, bounds]);
 
   function undo() {
     setUndoStack((s) => {
@@ -161,6 +216,9 @@ export default function App() {
         <button onClick={undo} disabled={undoStack.length === 0} style={{ padding: "4px 8px" }}>undo</button>
         <button onClick={reset} disabled={!originalBuffer.current} style={{ padding: "4px 8px" }}>reset</button>
         {selection.size > 0 && <button onClick={() => setSelection(new Set())} style={{ padding: "4px 8px" }}>clear ({selection.size})</button>}
+        <button onClick={exportPly} disabled={!buffer} style={{ padding: "4px 8px" }}>내보내기</button>
+        <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer} style={{ padding: "4px 8px" }}>스크린샷</button>
+        <button onClick={() => setShowStats((v) => !v)} style={{ padding: "4px 8px" }}>통계</button>
         <button onClick={() => setShowHelp((v) => !v)} style={{ padding: "4px 8px" }}>?</button>
         <button onClick={() => setShowPanel((v) => !v)} style={{ padding: "4px 10px" }}>⚙</button>
         <span style={{ flex: 2, minWidth: 80 }}>{status}</span>
@@ -210,6 +268,28 @@ export default function App() {
               <button style={{ flex: 1, padding: 6 }} onClick={() => moveSelection(i === 0 ? moveStep : 0, i === 1 ? moveStep : 0, i === 2 ? moveStep : 0)}>＋</button>
             </div>
           ))}
+          <div style={{ borderTop: "1px solid #444", margin: "2px 0" }} />
+          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>색
+            <input type="color" value={editColor} onChange={(e) => setEditColor(e.target.value)} />
+            <span style={{ flex: 1 }} />
+            <input type="range" min={0} max={1} step={0.01} value={editAlpha} onChange={(e) => setEditAlpha(parseFloat(e.target.value))} style={{ width: 60 }} title="불투명도" />
+          </label>
+          <button style={{ padding: 6 }} onClick={applyColorOpacity}>색·불투명도 적용</button>
+          <button style={{ padding: 6, background: "#822", color: "#fff", border: "none", borderRadius: 4 }} onClick={deleteSelection}>삭제 ({selection.size})</button>
+        </div>
+      )}
+
+      {showStats && stats && (
+        <div style={{
+          position: "absolute", zIndex: 3, right: 8, bottom: 12, padding: 12,
+          background: "rgba(0,0,0,0.82)", color: "#fff", font: "13px monospace", borderRadius: 8,
+          display: "flex", flexDirection: "column", gap: 4, minWidth: 180,
+        }}>
+          <div><b>📊 통계</b></div>
+          <div>가우시안: {stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()} 슬롯`}</div>
+          <div>바운드: {stats.size.map((v) => v.toFixed(2)).join(" × ")}</div>
+          <div>선택: {selection.size.toLocaleString()}</div>
+          <div>메모리: {stats.mb.toFixed(1)} MB</div>
         </div>
       )}
 
@@ -222,9 +302,10 @@ export default function App() {
         }} />
       )}
 
-      <Canvas dpr={dpr} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+      <Canvas dpr={dpr} gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault />
+        <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && (
