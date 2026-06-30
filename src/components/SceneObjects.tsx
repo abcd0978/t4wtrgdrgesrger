@@ -434,15 +434,37 @@ export function RotateHandle({
   );
 }
 
-/** Scale OrbitControls rotate speed by zoom: when the camera is close (small
- * orbit radius) a small drag would otherwise swing the nearby view wildly, so
- * slow rotation down as you zoom in (full speed at/beyond the default framing). */
-export function AdaptiveRotateSpeed({ sceneRadius }: { sceneRadius: number }) {
+/** Scale OrbitControls rotate speed by how close the camera is to actual content
+ * (nearest gaussian, sub-sampled), not the orbit target — so rotation stays calm
+ * whenever you're near the data, however you got there (zoom, fly, or teleport).
+ * Falls back to camera↔target distance when there's no buffer. */
+export function AdaptiveRotateSpeed({
+  sceneRadius, bufferRef,
+}: {
+  sceneRadius: number;
+  bufferRef: React.MutableRefObject<Uint32Array | null>;
+}) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    const dist = camera.position.distanceTo(controls.target);
+    const buf = bufferRef.current;
+    let dist = camera.position.distanceTo(controls.target);
+    if (buf) {
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const n = buf.length / 8;
+      const step = Math.max(1, Math.floor(n / 2000));
+      const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+      let min2 = Infinity;
+      for (let i = 0; i < n; i += step) {
+        const b = i * 32;
+        if (dv.getUint8(b + 31) === 0) continue;
+        const dx = dv.getFloat32(b, true) - cx, dy = dv.getFloat32(b + 4, true) - cy, dz = dv.getFloat32(b + 8, true) - cz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < min2) min2 = d2;
+      }
+      if (min2 < Infinity) dist = Math.sqrt(min2);
+    }
     controls.rotateSpeed = Math.min(1, Math.max(0.1, dist / (sceneRadius || 1)));
   });
   return null;

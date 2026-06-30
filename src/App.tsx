@@ -751,7 +751,7 @@ export default function App() {
       <Canvas dpr={dpr} gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
-        {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} />}
+        {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />
