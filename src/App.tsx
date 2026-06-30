@@ -49,6 +49,8 @@ export default function App() {
   const [settings, setSettings] = React.useState<RenderSettings>(DEFAULT_SETTINGS);
   const [showPanel, setShowPanel] = React.useState(false);
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
+  const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
+  const [showTimeline, setShowTimeline] = React.useState(true);
   const [bg, setBg] = React.useState("#ffffff");
   const [showGrid, setShowGrid] = React.useState(true);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
@@ -508,37 +510,40 @@ export default function App() {
   }
 
   const hasTimeline = !!(frameCum && frameCum.length > 1);
+  const timelineVisible = hasTimeline && showTimeline;
   const clipA = Math.min(clipIn, clipOut), clipB = Math.max(clipIn, clipOut);
   const tlPct = (i: number) => (hasTimeline ? (i / (frameCum!.length - 1)) * 100 : 0);
   const rangeCount = frameCum ? frameCum[clipB] - (clipA > 0 ? frameCum[clipA - 1] : 0) : 0;
 
   return (
     <div style={{ position: "fixed", inset: 0 }}>
-      <div className="panel toolbar">
-        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" className="grow" style={{ minWidth: 120 }} />
-        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ flex: 2, minWidth: 160 }}>
+      <div className={"panel toolbar" + (menuOpen ? "" : " collapsed")}>
+        <button className="hamburger icon" onClick={() => setMenuOpen((o) => !o)} title="메뉴">{menuOpen ? "✕" : "☰"}</button>
+        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" className="grow menu-only" style={{ minWidth: 120 }} />
+        <select value={runId} onChange={(e) => setRunId(e.target.value)} className="menu-only" style={{ flex: 2, minWidth: 160 }}>
           {runs.length === 0 && <option value={runId}>{runId}</option>}
           {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
         </select>
-        <select value={mode} onChange={(e) => setMode(e.target.value as "snapshot" | "delta")}>
+        <select value={mode} onChange={(e) => setMode(e.target.value as "snapshot" | "delta")} className="menu-only">
           <option value="snapshot">snapshot</option>
           <option value="delta">delta</option>
         </select>
-        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ width: 56 }} />}
+        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" className="menu-only" style={{ width: 56 }} />}
         <button className="accent" onClick={() => load()} disabled={busy}>{busy ? "…" : "Load"}</button>
         <input ref={fileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onPlyFile} />
-        <button onClick={() => fileRef.current?.click()} disabled={busy} title="로컬 .ply 파일 열기">PLY 열기</button>
+        <button className="menu-only" onClick={() => fileRef.current?.click()} disabled={busy} title="로컬 .ply 파일 열기">PLY 열기</button>
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
-        {selection.size > 0 && <button onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
-        {vis.mode !== "all" && <button onClick={showAll}>전체 보기</button>}
-        <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
-        <button onClick={exportPly} disabled={!buffer}>내보내기</button>
-        <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
-        <button onClick={share} disabled={!buffer}>공유</button>
-        <button onClick={() => setShowStats((v) => !v)}>통계</button>
-        <button className="ghost icon" onClick={() => setShowHelp((v) => !v)}>?</button>
-        <button className="ghost icon" onClick={() => setShowPanel((v) => !v)}>⚙</button>
+        {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
+        {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
+        <button className={"menu-only" + (measureMode ? " active" : "")} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
+        {hasTimeline && <button className={"menu-only" + (showTimeline ? " active" : "")} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
+        <button className="menu-only" onClick={exportPly} disabled={!buffer}>내보내기</button>
+        <button className="menu-only" onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
+        <button className="menu-only" onClick={share} disabled={!buffer}>공유</button>
+        <button className="menu-only" onClick={() => setShowStats((v) => !v)}>통계</button>
+        <button className="ghost icon menu-only" onClick={() => setShowHelp((v) => !v)}>?</button>
+        <button className="ghost icon menu-only" onClick={() => setShowPanel((v) => !v)}>⚙</button>
         <span className="grow muted num" style={{ minWidth: 90, textAlign: "right" }}>{status}</span>
       </div>
 
@@ -551,7 +556,7 @@ export default function App() {
       )}
 
       {showHelp && (
-        <div className="panel" style={{ left: 10, bottom: hasTimeline ? 112 : 10, width: "min(420px, calc(100vw - 20px))", maxHeight: `calc(100dvh - ${(hasTimeline ? 112 : 10) + 16}px)` }}>
+        <div className="panel" style={{ left: 10, bottom: timelineVisible ? 112 : 10, width: "min(420px, calc(100vw - 20px))", maxHeight: `calc(100dvh - ${(timelineVisible ? 112 : 10) + 16}px)` }}>
           <div className="panel-section">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="panel-title">📖 사용 방법</span>
@@ -633,7 +638,7 @@ export default function App() {
         </div>
       )}
 
-      {hasTimeline && (
+      {timelineVisible && (
         <div className="panel" style={{ bottom: 10, left: 10, right: 10 }}>
           <div className="panel-section" style={{ gap: 12 }}>
             <div className="timeline-track">
@@ -659,7 +664,7 @@ export default function App() {
       )}
 
       {showStats && stats && (
-        <div className="panel" style={{ right: 10, bottom: hasTimeline ? 112 : 10, minWidth: 200, maxWidth: "calc(100vw - 20px)", maxHeight: `calc(100dvh - ${(hasTimeline ? 112 : 10) + 16}px)` }}>
+        <div className="panel" style={{ right: 10, bottom: timelineVisible ? 112 : 10, minWidth: 200, maxWidth: "calc(100vw - 20px)", maxHeight: `calc(100dvh - ${(timelineVisible ? 112 : 10) + 16}px)` }}>
           <div className="panel-section" style={{ gap: 6 }}>
             <div className="panel-title">📊 통계</div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">가우시안</span><span className="num">{stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()}`}</span></div>
