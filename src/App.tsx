@@ -498,6 +498,15 @@ export default function App() {
     camApiRef.current.apply([c[0] + (dir[0] / L) * D, c[1] + (dir[1] / L) * D, c[2] + (dir[2] / L) * D], c);
   }
 
+  // Put the camera at the world origin (where the axes gizmo sits — usually the
+  // capture/reference origin), looking at the data centre.
+  function cameraToOrigin() {
+    if (!bounds || !camApiRef.current) return;
+    const c = center(bounds);
+    camApiRef.current.apply([0, 0, 0], Math.hypot(c[0], c[1], c[2]) < 1e-4 ? [0, 0, -1] : c);
+    setStatus("카메라 → 원점(축)");
+  }
+
   const hasTimeline = !!(frameCum && frameCum.length > 1);
   const clipA = Math.min(clipIn, clipOut), clipB = Math.max(clipIn, clipOut);
   const tlPct = (i: number) => (hasTimeline ? (i / (frameCum!.length - 1)) * 100 : 0);
@@ -537,7 +546,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView }}
+          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin }}
         />
       )}
 
