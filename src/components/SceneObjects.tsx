@@ -6,25 +6,86 @@ import { type Bounds, center, radius, selCenter } from "../lib/bounds";
 export interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
 export interface DragRect { x0: number; y0: number; x1: number; y1: number }
 
-/** Fit the camera to the data once (z-up, like viser). */
-export function FitCamera({ bounds }: { bounds: Bounds }) {
+type Controls = { target: { set: (x: number, y: number, z: number) => void }; update: () => void } | null;
+
+/** Fit the camera to the data (z-up, like viser). Repositions only on the first
+ * enabled fit; near/far track bounds every load so reloads don't re-aim the
+ * camera (keeps your current view) but also don't clip. */
+export function FitCamera({ bounds, enabled = true, onFitted }: { bounds: Bounds; enabled?: boolean; onFitted?: () => void }) {
   const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as
-    | { target: { set: (x: number, y: number, z: number) => void }; update: () => void } | null;
+  const controls = useThree((s) => s.controls) as Controls;
   const fitted = React.useRef(false);
   React.useEffect(() => {
-    if (fitted.current) return;
-    fitted.current = true;
-    const c = center(bounds), r = radius(bounds), d = r * 2.5 + 1;
-    camera.up.set(0, 0, 1);
-    camera.position.set(c[0] + d, c[1] - d, c[2] + d);
+    const r = radius(bounds);
     camera.near = Math.max(r * 0.001, 0.001);
     camera.far = r * 5000 + 1000;
     camera.updateProjectionMatrix();
+    if (!enabled || fitted.current) return;
+    fitted.current = true;
+    const c = center(bounds), d = r * 2.5 + 1;
+    camera.up.set(0, 0, 1);
+    camera.position.set(c[0] + d, c[1] - d, c[2] + d);
     if (controls?.target) { controls.target.set(c[0], c[1], c[2]); controls.update(); }
     else camera.lookAt(c[0], c[1], c[2]);
-  }, [bounds, camera, controls]);
+    onFitted?.();
+  }, [bounds, camera, controls, enabled, onFitted]);
   return null;
+}
+
+/** Applies a saved camera (pos + target) once, for URL-restored views. */
+export function ApplyCamera({ view, onApplied }: { view: { p: [number, number, number]; t: [number, number, number] }; onApplied?: () => void }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as Controls;
+  const done = React.useRef(false);
+  React.useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+    camera.up.set(0, 0, 1);
+    camera.position.set(view.p[0], view.p[1], view.p[2]);
+    if (controls?.target) { controls.target.set(view.t[0], view.t[1], view.t[2]); controls.update(); }
+    else camera.lookAt(view.t[0], view.t[1], view.t[2]);
+    onApplied?.();
+  }, [camera, controls, view, onApplied]);
+  return null;
+}
+
+/** Publishes a getter for the current camera pos+target (for share URLs). */
+export function CameraBridge({ viewRef }: { viewRef: React.MutableRefObject<(() => { p: [number, number, number]; t: [number, number, number] }) | null> }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target?: { x: number; y: number; z: number } } | null;
+  React.useEffect(() => {
+    viewRef.current = () => ({
+      p: [camera.position.x, camera.position.y, camera.position.z],
+      t: controls?.target ? [controls.target.x, controls.target.y, controls.target.z] : [0, 0, 0],
+    });
+    return () => { viewRef.current = null; };
+  }, [camera, controls, viewRef]);
+  return null;
+}
+
+/** Two-point measure: a sphere at each picked point + a connecting line. */
+export function MeasureView({ points, size }: { points: [number, number, number][]; size: number }) {
+  const lineGeo = React.useMemo(() => {
+    if (points.length < 2) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute([...points[0], ...points[1]], 3));
+    return g;
+  }, [points]);
+  return (
+    <>
+      {points.map((p, i) => (
+        <mesh key={i} position={p} renderOrder={20000}>
+          <sphereGeometry args={[size, 16, 16]} />
+          <meshBasicMaterial color="#00d0ff" depthTest={false} transparent opacity={0.9} />
+        </mesh>
+      ))}
+      {lineGeo && (
+        <lineSegments frustumCulled={false} renderOrder={20000} geometry={lineGeo}>
+          <lineBasicMaterial color="#00d0ff" depthTest={false} />
+        </lineSegments>
+      )}
+    </>
+  );
 }
 
 /** Dashed grid on the z=min floor plane. */
@@ -53,47 +114,63 @@ export function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts })
   );
 }
 
-/** Double-click = single pick; double-click + drag = box select. Plain drag = camera. */
+/** Double-click = single pick; double-click + drag = box select. Plain drag = camera.
+ * In measure mode a single double-click instead reports the picked gaussian's
+ * world position (for the two-point distance tool). */
 export function InputController({
-  bufferRef, selectionRef, setSelection, setDrag, setSelecting,
+  bufferRef, selectionRef, setSelection, setDrag, setSelecting, measureMode, onMeasurePick,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
   selectionRef: React.MutableRefObject<Set<number>>;
   setSelection: (s: Set<number>) => void;
   setDrag: (d: DragRect | null) => void;
   setSelecting: (b: boolean) => void;
+  measureMode: boolean;
+  onMeasurePick: (p: [number, number, number]) => void;
 }) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
-  const env = React.useRef({ camera, w: size.width, h: size.height });
-  env.current = { camera, w: size.width, h: size.height };
+  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, onMeasurePick });
+  env.current = { camera, w: size.width, h: size.height, measureMode, onMeasurePick };
 
   React.useEffect(() => {
     const el = gl.domElement;
     let lastUp = 0, lx = 0, ly = 0, sel = false, sx = 0, sy = 0;
 
-    function pick(x0: number, y0: number, x1: number, y1: number, additive: boolean, single: boolean) {
+    // Nearest visible gaussian to a screen point, or -1.
+    function pickNearest(x0: number, y0: number): number {
       const buffer = bufferRef.current;
-      if (!buffer) return;
+      if (!buffer) return -1;
       const { camera, w, h } = env.current;
       const dv = new DataView(buffer.buffer);
       const n = buffer.length / 8;
       const v = new THREE.Vector3();
+      let best = -1, bestD = 400;
+      for (let i = 0; i < n; i++) {
+        const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
+        v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)).project(camera);
+        if (v.z < -1 || v.z > 1) continue;
+        const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
+        const d = (px - x0) ** 2 + (py - y0) ** 2;
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return best;
+    }
+
+    function pick(x0: number, y0: number, x1: number, y1: number, additive: boolean, single: boolean) {
+      const buffer = bufferRef.current;
+      if (!buffer) return;
       const out = additive ? new Set(selectionRef.current) : new Set<number>();
       if (single) {
-        let best = -1, bestD = 400;
-        for (let i = 0; i < n; i++) {
-          const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
-          v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)).project(camera);
-          if (v.z < -1 || v.z > 1) continue;
-          const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
-          const d = (px - x0) ** 2 + (py - y0) ** 2;
-          if (d < bestD) { bestD = d; best = i; }
-        }
+        const best = pickNearest(x0, y0);
         if (best >= 0) out.add(best);
       } else {
+        const { camera, w, h } = env.current;
+        const dv = new DataView(buffer.buffer);
+        const n = buffer.length / 8;
+        const v = new THREE.Vector3();
         const minX = Math.min(x0, x1), maxX = Math.max(x0, x1), minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
         for (let i = 0; i < n; i++) {
           const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
@@ -104,6 +181,15 @@ export function InputController({
         }
       }
       setSelection(out);
+    }
+
+    function measure(x0: number, y0: number) {
+      const buffer = bufferRef.current;
+      const idx = pickNearest(x0, y0);
+      if (idx < 0 || !buffer) return;
+      const dv = new DataView(buffer.buffer);
+      const b = idx * 32;
+      env.current.onMeasurePick([dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)]);
     }
 
     const down = (e: PointerEvent) => {
@@ -120,7 +206,8 @@ export function InputController({
     const up = (e: PointerEvent) => {
       if (sel) {
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
-        pick(sx, sy, e.clientX, e.clientY, e.shiftKey, dist < 5);
+        if (env.current.measureMode) { if (dist < 5) measure(sx, sy); }
+        else pick(sx, sy, e.clientX, e.clientY, e.shiftKey, dist < 5);
         sel = false; if (controls) controls.enabled = true; setSelecting(false); setDrag(null);
       }
       lastUp = performance.now(); lx = e.clientX; ly = e.clientY;

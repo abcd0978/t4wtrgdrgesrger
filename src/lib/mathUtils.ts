@@ -87,6 +87,36 @@ export function rotationMatrixToQuaternion(m: number[]): [number, number, number
   return [(m10 - m01) / S, (m02 + m20) / S, (m12 + m21) / S, 0.25 * S];
 }
 
+/** Row-major rotation matrix about a principal axis (0=X,1=Y,2=Z) by radians. */
+export function rotationAboutAxis(axis: 0 | 1 | 2, rad: number): number[] {
+  const c = Math.cos(rad), s = Math.sin(rad);
+  if (axis === 0) return [1, 0, 0, 0, c, -s, 0, s, c];
+  if (axis === 1) return [c, 0, s, 0, 1, 0, -s, 0, c];
+  return [c, -s, 0, s, c, 0, 0, 0, 1];
+}
+
+/** Rotate a covariance (upper-tri): Σ' = R Σ Rᵀ, R row-major 3x3. */
+export function rotateCovariance(cov6: number[], R: number[]): number[] {
+  const s = [cov6[0], cov6[1], cov6[2], cov6[1], cov6[3], cov6[4], cov6[2], cov6[4], cov6[5]];
+  const m = new Array(9); // M = R Σ
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    let a = 0; for (let k = 0; k < 3; k++) a += R[i * 3 + k] * s[k * 3 + j]; m[i * 3 + j] = a;
+  }
+  const o = new Array(9); // Σ' = M Rᵀ
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    let a = 0; for (let k = 0; k < 3; k++) a += m[i * 3 + k] * R[j * 3 + k]; o[i * 3 + j] = a;
+  }
+  return [o[0], o[1], o[2], o[4], o[5], o[8]];
+}
+
+/** Scale a covariance (upper-tri) per axis: Σ' = diag(s) Σ diag(s). */
+export function scaleCovariance(cov6: number[], sx: number, sy: number, sz: number): number[] {
+  return [
+    sx * sx * cov6[0], sx * sy * cov6[1], sx * sz * cov6[2],
+    sy * sy * cov6[3], sy * sz * cov6[4], sz * sz * cov6[5],
+  ];
+}
+
 /** Covariance (upper-tri) -> per-axis scale + quaternion wxyz. */
 export function covarianceToScaleRotation(cov6: number[]): {
   scale: [number, number, number];

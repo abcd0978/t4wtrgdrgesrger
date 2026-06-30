@@ -1,14 +1,21 @@
 import React from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
+import { DataUtils } from "three";
 import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
-import { type Bounds, computeBounds, radius } from "./lib/bounds";
+import { type Bounds, computeBounds, radius, selCenter } from "./lib/bounds";
+import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, DashedGrid, InputController, DragMoveHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, CanvasCapture, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly } from "./lib/ply";
+import { readUrlState, buildShareUrl } from "./lib/urlState";
+
+type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
+type View = { p: [number, number, number]; t: [number, number, number] };
+const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 const HELP = [
   ["드래그", "카메라 회전"],
@@ -16,8 +23,10 @@ const HELP = [
   ["더블클릭", "가우시안 1개 선택"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
   ["주황 핸들 드래그", "선택한 것 이동"],
-  ["삭제 / 색·불투명도", "선택 후 왼쪽 패널"],
-  ["내보내기 / 스크린샷", "상단 버튼 (.ply / .png)"],
+  ["왼쪽 패널", "이동·회전·스케일·색·복제·숨기기·격리·삭제"],
+  ["측정 버튼", "두 점 더블클릭 → 실측 거리"],
+  ["타임라인 (delta)", "슬라이더로 스캔 누적 재생"],
+  ["내보내기 / 스크린샷 / 공유", "상단 버튼 (.ply / .png / 링크)"],
   ["undo / reset", "되돌리기 / 처음으로"],
   ["⚙ 버튼", "렌더 설정 열기"],
 ];
@@ -53,37 +62,48 @@ export default function App() {
   const [editColor, setEditColor] = React.useState("#ff8800");
   const [editAlpha, setEditAlpha] = React.useState(1);
   const [showStats, setShowStats] = React.useState(false);
+  const [vis, setVis] = React.useState<Vis>({ mode: "all", set: new Set() });
+  const [frameCum, setFrameCum] = React.useState<number[] | null>(null); // delta cumulative counts
+  const [frameIdx, setFrameIdx] = React.useState(0);
+  const [measureMode, setMeasureMode] = React.useState(false);
+  const [measurePts, setMeasurePts] = React.useState<[number, number, number][]>([]);
+  const [camDone, setCamDone] = React.useState(false); // first fit / URL view applied
   const captureRef = React.useRef<((name: string) => void) | null>(null);
+  const viewRef = React.useRef<(() => View) | null>(null);
+  const pendingView = React.useRef<View | null>(null);
+  const pendingSel = React.useRef<number[] | null>(null);
+  const didInit = React.useRef(false);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
-  const dragWork = React.useRef<{ color: Uint32Array; snap: Uint32Array } | null>(null);
   const bufferRef = React.useRef<Uint32Array | null>(null);
   const selectionRef = React.useRef<Set<number>>(selection);
-  bufferRef.current = buffer;
   selectionRef.current = selection;
 
   React.useEffect(() => { getRuns(host).then(setRuns).catch(() => setRuns([])); }, [host]);
 
-  async function load() {
+  async function load(over?: Partial<{ host: string; runId: string; mode: "snapshot" | "delta"; maxFrames: string }>) {
+    const _host = over?.host ?? host, _run = over?.runId ?? runId;
+    const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
     setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
     setUndoStack([]); setLiveBuffer(null); originalBuffer.current = null;
+    setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     try {
       let final: Uint32Array | null = null;
-      if (mode === "snapshot") {
+      if (_mode === "snapshot") {
         setStatus("fetching snapshot…");
-        final = npzToPacked(await unzipNpz(await getSnapshot(host, runId)));
+        final = npzToPacked(await unzipNpz(await getSnapshot(_host, _run)));
         setBuffer(final); setBounds(computeBounds(final));
         setStatus(`done: ${final.length / 8} gaussians`);
       } else {
         setStatus("fetching manifest…");
-        const manifest = await getDeltaManifest(host, runId);
-        const limit = Math.min(manifest.frames.length, parseInt(maxFrames) || manifest.frames.length);
+        const manifest = await getDeltaManifest(_host, _run);
+        const limit = Math.min(manifest.frames.length, parseInt(_maxFrames) || manifest.frames.length);
         const total = manifest.frames[limit - 1]?.cumulative_gaussian_count ?? 0;
         const capacity = new Uint32Array(total * 8);
         let offset = 0;
         const updateEvery = Math.max(1, Math.floor(limit / 20));
         for (let i = 0; i < limit; i++) {
           const f = manifest.frames[i];
-          const p = npzToPacked(await unzipNpz(await getAddedNpz(host, runId, f.frame_index)));
+          const p = npzToPacked(await unzipNpz(await getAddedNpz(_host, _run, f.frame_index)));
           if (offset + p.length <= capacity.length) { capacity.set(p, offset); offset += p.length; }
           if ((i + 1) % updateEvery === 0 || i === limit - 1) {
             setBuffer(capacity.subarray());
@@ -92,21 +112,61 @@ export default function App() {
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
           }
         }
+        const cum = manifest.frames.slice(0, limit).map((f) => f.cumulative_gaussian_count);
+        setFrameCum(cum); setFrameIdx(cum.length - 1);
         final = capacity;
       }
       if (final) originalBuffer.current = final.slice();
+      if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
     } finally { setBusy(false); }
   }
 
-  const shownBuffer = React.useMemo(() => {
-    if (!buffer || selection.size === 0) return buffer;
+  // Restore state from a shared URL on first mount (camera/selection applied post-load).
+  React.useEffect(() => {
+    if (didInit.current) return;
+    didInit.current = true;
+    const u = readUrlState();
+    if (u.host !== undefined) setHost(u.host);
+    if (u.run) setRunId(u.run);
+    if (u.mode) setMode(u.mode);
+    if (u.maxFrames) setMaxFrames(u.maxFrames);
+    if (u.cam) pendingView.current = u.cam;
+    if (u.sel) pendingSel.current = u.sel;
+    if (u.run) load({ host: u.host, runId: u.run, mode: u.mode, maxFrames: u.maxFrames });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The rendered buffer: timeline truncation + hide/isolate (alpha 0) + selection
+  // highlight, all overlaid on a copy so edits stay on the real `buffer`. Same
+  // length as `buffer` -> renderer updates in place (scrubbing stays snappy).
+  const displayBuffer = React.useMemo(() => {
+    if (!buffer) return null;
+    // At the last frame, show the whole (possibly edited) buffer; only truncate
+    // when scrubbed back. Keeps edits/duplicates visible in delta mode.
+    const scrubbing = frameCum != null && frameIdx < frameCum.length - 1;
+    const frontier = scrubbing ? frameCum![frameIdx] : Infinity;
+    if (selection.size === 0 && vis.mode === "all" && !scrubbing) return buffer;
     const hb = buffer.slice();
     const dv = new DataView(hb.buffer);
-    for (const i of selection) { dv.setUint8(i * 32 + 28, 255); dv.setUint8(i * 32 + 29, 90); dv.setUint8(i * 32 + 30, 0); }
+    const slots = hb.length / 8;
+    if (scrubbing || vis.mode !== "all") {
+      for (let i = 0; i < slots; i++) {
+        let hide = i >= frontier;
+        if (vis.mode === "hide") hide = hide || vis.set.has(i);
+        else if (vis.mode === "isolate") hide = hide || !vis.set.has(i);
+        if (hide) dv.setUint8(i * 32 + 31, 0);
+      }
+    }
+    for (const i of selection) {
+      if (i < frontier && dv.getUint8(i * 32 + 31) !== 0) {
+        dv.setUint8(i * 32 + 28, 255); dv.setUint8(i * 32 + 29, 90); dv.setUint8(i * 32 + 30, 0);
+      }
+    }
     return hb;
-  }, [buffer, selection]);
+  }, [buffer, selection, vis, frameCum, frameIdx]);
+
+  bufferRef.current = displayBuffer; // pick against what's actually visible
 
   // One edit primitive for move/delete/recolor: snapshot for undo, copy, mutate
   // the selected gaussians, swap the ref. Same length -> renderer updates the
@@ -147,6 +207,87 @@ export default function App() {
     commitEdit((dv, b) => {
       dv.setUint8(b + 28, r); dv.setUint8(b + 29, g); dv.setUint8(b + 30, bl); dv.setUint8(b + 31, a);
     }, `recolored ${selection.size} gaussians`);
+  }
+
+  // Rotate / scale the selection about its centroid: positions move, and the
+  // covariance transforms with it (Σ' = R Σ Rᵀ / diag(s) Σ diag(s)).
+  function rotateSelection(axis: 0 | 1 | 2, deg: number) {
+    if (!buffer || selection.size === 0) return;
+    const c = selCenter(buffer, selection);
+    const R = rotationAboutAxis(axis, (deg * Math.PI) / 180);
+    const cov = [0, 0, 0, 0, 0, 0];
+    commitEdit((dv, b) => {
+      const px = dv.getFloat32(b, true) - c[0], py = dv.getFloat32(b + 4, true) - c[1], pz = dv.getFloat32(b + 8, true) - c[2];
+      dv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
+      dv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
+      dv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
+      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
+      const rc = rotateCovariance(cov, R);
+      for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
+    }, `rotated ${selection.size} gaussians`);
+  }
+
+  function scaleSelection(f: number) {
+    if (!buffer || selection.size === 0) return;
+    const c = selCenter(buffer, selection);
+    const cov = [0, 0, 0, 0, 0, 0];
+    commitEdit((dv, b) => {
+      dv.setFloat32(b, c[0] + (dv.getFloat32(b, true) - c[0]) * f, true);
+      dv.setFloat32(b + 4, c[1] + (dv.getFloat32(b + 4, true) - c[1]) * f, true);
+      dv.setFloat32(b + 8, c[2] + (dv.getFloat32(b + 8, true) - c[2]) * f, true);
+      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
+      const sc = scaleCovariance(cov, f, f, f);
+      for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(sc[k]), true);
+    }, `scaled ${selection.size} gaussians`);
+  }
+
+  // Copy the selection (offset along X) into appended slots; select the copies.
+  function duplicateSelection() {
+    if (!buffer || selection.size === 0 || !bounds) return;
+    const sel = [...selection];
+    const nb = new Uint32Array(buffer.length + sel.length * 8);
+    nb.set(buffer);
+    const dv = new DataView(nb.buffer);
+    const off = radius(bounds) * 0.05;
+    const newSel = new Set<number>();
+    let w = buffer.length;
+    for (const i of sel) {
+      nb.copyWithin(w, i * 8, i * 8 + 8);
+      dv.setFloat32(w * 4, dv.getFloat32(w * 4, true) + off, true);
+      newSel.add(w / 8);
+      w += 8;
+    }
+    setUndoStack((s) => [...s.slice(-29), buffer]);
+    setBuffer(nb); setBounds(computeBounds(nb)); setSelection(newSel);
+    setStatus(`duplicated ${sel.length} gaussians`);
+  }
+
+  // Hide/isolate are non-destructive (display-only alpha 0); not on the undo stack.
+  function hideSelection() {
+    if (selection.size === 0) return;
+    setVis((v) => ({ mode: "hide", set: v.mode === "hide" ? new Set([...v.set, ...selection]) : new Set(selection) }));
+  }
+  function isolateSelection() {
+    if (selection.size === 0) return;
+    setVis({ mode: "isolate", set: new Set(selection) });
+  }
+  function showAll() { setVis({ mode: "all", set: new Set() }); }
+
+  function onMeasurePick(p: [number, number, number]) {
+    setMeasurePts((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
+  }
+  const measureDist = measurePts.length === 2 ? dist3(measurePts[0], measurePts[1]) : null;
+
+  function share() {
+    const v = viewRef.current?.();
+    const url = buildShareUrl({
+      host, run: runId, mode, maxFrames,
+      cam: v ?? undefined,
+      sel: selection.size > 0 ? [...selection] : undefined,
+    });
+    const c = navigator.clipboard;
+    if (c) c.writeText(url).then(() => setStatus("공유 링크 복사됨")).catch(() => setStatus(url));
+    else setStatus(url);
   }
 
   const downloadBlob = React.useCallback((blob: Blob, name: string) => {
@@ -192,36 +333,34 @@ export default function App() {
     setSplatKey((k) => k + 1);
   }
 
-  const display = liveBuffer ?? shownBuffer;
-  const inputStyle: React.CSSProperties = { padding: 4 };
+  const display = liveBuffer ?? displayBuffer;
 
   return (
     <div style={{ position: "fixed", inset: 0 }}>
-      <div style={{
-        position: "absolute", zIndex: 3, top: 0, left: 0, right: 0,
-        display: "flex", gap: 6, padding: 8, alignItems: "center", flexWrap: "wrap",
-        background: "rgba(0,0,0,0.65)", color: "#fff", font: "15px monospace",
-      }}>
-        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" style={{ ...inputStyle, flex: 1, minWidth: 110 }} />
-        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...inputStyle, flex: 2, minWidth: 150 }}>
+      <div className="panel toolbar">
+        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" className="grow" style={{ minWidth: 120 }} />
+        <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ flex: 2, minWidth: 160 }}>
           {runs.length === 0 && <option value={runId}>{runId}</option>}
           {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
         </select>
-        <select value={mode} onChange={(e) => setMode(e.target.value as "snapshot" | "delta")} style={inputStyle}>
+        <select value={mode} onChange={(e) => setMode(e.target.value as "snapshot" | "delta")}>
           <option value="snapshot">snapshot</option>
           <option value="delta">delta</option>
         </select>
-        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ ...inputStyle, width: 50 }} />}
-        <button onClick={load} disabled={busy} style={{ padding: "4px 12px" }}>{busy ? "…" : "Load"}</button>
-        <button onClick={undo} disabled={undoStack.length === 0} style={{ padding: "4px 8px" }}>undo</button>
-        <button onClick={reset} disabled={!originalBuffer.current} style={{ padding: "4px 8px" }}>reset</button>
-        {selection.size > 0 && <button onClick={() => setSelection(new Set())} style={{ padding: "4px 8px" }}>clear ({selection.size})</button>}
-        <button onClick={exportPly} disabled={!buffer} style={{ padding: "4px 8px" }}>내보내기</button>
-        <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer} style={{ padding: "4px 8px" }}>스크린샷</button>
-        <button onClick={() => setShowStats((v) => !v)} style={{ padding: "4px 8px" }}>통계</button>
-        <button onClick={() => setShowHelp((v) => !v)} style={{ padding: "4px 8px" }}>?</button>
-        <button onClick={() => setShowPanel((v) => !v)} style={{ padding: "4px 10px" }}>⚙</button>
-        <span style={{ flex: 2, minWidth: 80 }}>{status}</span>
+        {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" style={{ width: 56 }} />}
+        <button className="accent" onClick={() => load()} disabled={busy}>{busy ? "…" : "Load"}</button>
+        <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
+        <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
+        {selection.size > 0 && <button onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
+        {vis.mode !== "all" && <button onClick={showAll}>전체 보기</button>}
+        <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
+        <button onClick={exportPly} disabled={!buffer}>내보내기</button>
+        <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
+        <button onClick={share} disabled={!buffer}>공유</button>
+        <button onClick={() => setShowStats((v) => !v)}>통계</button>
+        <button className="ghost icon" onClick={() => setShowHelp((v) => !v)}>?</button>
+        <button className="ghost icon" onClick={() => setShowPanel((v) => !v)}>⚙</button>
+        <span className="grow muted num" style={{ minWidth: 90, textAlign: "right" }}>{status}</span>
       </div>
 
       {showPanel && (
@@ -233,63 +372,107 @@ export default function App() {
       )}
 
       {showHelp && (
-        <div style={{
-          position: "absolute", zIndex: 3, left: 12, bottom: 12, padding: "16px 20px",
-          background: "rgba(0,0,0,0.8)", color: "#fff", font: "16px sans-serif", borderRadius: 10,
-          lineHeight: 1.8,
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 24, marginBottom: 10, fontSize: 20 }}>
-            <b>📖 사용 방법</b>
-            <span style={{ cursor: "pointer", opacity: 0.7 }} onClick={() => setShowHelp(false)}>✕</span>
-          </div>
-          {HELP.map(([k, v]) => (
-            <div key={k} style={{ display: "flex", gap: 16 }}>
-              <span style={{ width: 180, color: "#ffb060", fontWeight: 700 }}>{k}</span><span>{v}</span>
+        <div className="panel" style={{ left: 10, bottom: 10, maxWidth: 420 }}>
+          <div className="panel-section">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="panel-title">📖 사용 방법</span>
+              <button className="ghost icon" onClick={() => setShowHelp(false)}>✕</button>
             </div>
-          ))}
+            {HELP.map(([k, v]) => (
+              <div key={k} className="row" style={{ alignItems: "baseline" }}>
+                <span className="kbd">{k}</span><span className="muted">{v}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      {selection.size > 0 && (
-        <div style={{
-          position: "absolute", zIndex: 3, top: 50, left: 8, padding: 12,
-          background: "rgba(0,0,0,0.82)", color: "#fff", font: "14px monospace", borderRadius: 8,
-          display: "flex", flexDirection: "column", gap: 8, width: 190,
-        }}>
-          <div><b>선택 {selection.size}개 이동</b></div>
-          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>step
-            <input type="range" min={0.01} max={1} step={0.01} value={moveStep} onChange={(e) => setMoveStep(parseFloat(e.target.value))} style={{ flex: 1 }} />
-            <span style={{ width: 38, textAlign: "right" }}>{moveStep}</span>
-          </label>
-          {([["X", 0], ["Y", 1], ["Z", 2]] as const).map(([ax, i]) => (
-            <div key={ax} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ width: 14 }}>{ax}</span>
-              <button style={{ flex: 1, padding: 6 }} onClick={() => moveSelection(i === 0 ? -moveStep : 0, i === 1 ? -moveStep : 0, i === 2 ? -moveStep : 0)}>−</button>
-              <button style={{ flex: 1, padding: 6 }} onClick={() => moveSelection(i === 0 ? moveStep : 0, i === 1 ? moveStep : 0, i === 2 ? moveStep : 0)}>＋</button>
+      {selection.size > 0 && !measureMode && (
+        <div className="panel scroll" style={{ top: 62, left: 10, width: 214, maxHeight: "calc(100vh - 84px)" }}>
+          <div className="panel-section">
+            <div className="panel-title">선택 {selection.size.toLocaleString()}개</div>
+
+            <label className="row muted">이동
+              <input type="range" className="grow" min={0.01} max={1} step={0.01} value={moveStep} onChange={(e) => setMoveStep(parseFloat(e.target.value))} />
+              <span className="num" style={{ width: 36, textAlign: "right" }}>{moveStep}</span>
+            </label>
+            {([["X", 0], ["Y", 1], ["Z", 2]] as const).map(([ax, i]) => (
+              <div key={ax} className="seg">
+                <span className="axis">{ax}</span>
+                <button onClick={() => moveSelection(i === 0 ? -moveStep : 0, i === 1 ? -moveStep : 0, i === 2 ? -moveStep : 0)}>−</button>
+                <button onClick={() => moveSelection(i === 0 ? moveStep : 0, i === 1 ? moveStep : 0, i === 2 ? moveStep : 0)}>＋</button>
+              </div>
+            ))}
+
+            <hr className="divider" />
+            <div className="muted">회전 / 스케일</div>
+            {(["X", "Y", "Z"] as const).map((ax, i) => (
+              <div key={ax} className="seg">
+                <span className="axis">{ax}</span>
+                <button onClick={() => rotateSelection(i as 0 | 1 | 2, -15)}>⟲ 15°</button>
+                <button onClick={() => rotateSelection(i as 0 | 1 | 2, 15)}>⟳ 15°</button>
+              </div>
+            ))}
+            <div className="seg">
+              <span className="axis">⤢</span>
+              <button onClick={() => scaleSelection(1 / 1.1)}>− 작게</button>
+              <button onClick={() => scaleSelection(1.1)}>＋ 크게</button>
             </div>
-          ))}
-          <div style={{ borderTop: "1px solid #444", margin: "2px 0" }} />
-          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>색
-            <input type="color" value={editColor} onChange={(e) => setEditColor(e.target.value)} />
-            <span style={{ flex: 1 }} />
-            <input type="range" min={0} max={1} step={0.01} value={editAlpha} onChange={(e) => setEditAlpha(parseFloat(e.target.value))} style={{ width: 60 }} title="불투명도" />
-          </label>
-          <button style={{ padding: 6 }} onClick={applyColorOpacity}>색·불투명도 적용</button>
-          <button style={{ padding: 6, background: "#822", color: "#fff", border: "none", borderRadius: 4 }} onClick={deleteSelection}>삭제 ({selection.size})</button>
+
+            <hr className="divider" />
+            <label className="row muted">색
+              <input type="color" value={editColor} onChange={(e) => setEditColor(e.target.value)} />
+              <span className="grow" />
+              <span className="num">α</span>
+              <input type="range" min={0} max={1} step={0.01} value={editAlpha} onChange={(e) => setEditAlpha(parseFloat(e.target.value))} style={{ width: 72 }} />
+            </label>
+            <button onClick={applyColorOpacity}>색·불투명도 적용</button>
+
+            <hr className="divider" />
+            <div className="row">
+              <button className="grow" onClick={duplicateSelection}>복제</button>
+              <button className="grow" onClick={hideSelection}>숨기기</button>
+            </div>
+            <div className="row">
+              <button className="grow" onClick={isolateSelection}>격리</button>
+              <button className="grow danger" onClick={deleteSelection}>삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {measureMode && (
+        <div className="panel" style={{ top: 64, left: "50%", transform: "translateX(-50%)", maxWidth: 360 }}>
+          <div className="panel-section" style={{ gap: 6 }}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="panel-title">📏 측정</span>
+              <button className="ghost icon" onClick={() => { setMeasureMode(false); setMeasurePts([]); }}>✕</button>
+            </div>
+            <span className="muted">가우시안 두 점을 더블클릭 ({measurePts.length}/2)</span>
+            {measureDist != null && <span className="num" style={{ fontSize: 17, color: "var(--accent-2)" }}>거리: {measureDist.toFixed(3)}</span>}
+          </div>
+        </div>
+      )}
+
+      {frameCum && frameCum.length > 1 && (
+        <div className="panel" style={{ bottom: 10, left: "50%", transform: "translateX(-50%)", minWidth: 380 }}>
+          <div className="panel-section" style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <span className="panel-title" style={{ whiteSpace: "nowrap" }}>▶ 타임라인</span>
+            <input type="range" className="grow" min={0} max={frameCum.length - 1} step={1} value={frameIdx} onChange={(e) => setFrameIdx(parseInt(e.target.value))} />
+            <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum.length} · {frameCum[frameIdx].toLocaleString()}</span>
+          </div>
         </div>
       )}
 
       {showStats && stats && (
-        <div style={{
-          position: "absolute", zIndex: 3, right: 8, bottom: 12, padding: 12,
-          background: "rgba(0,0,0,0.82)", color: "#fff", font: "13px monospace", borderRadius: 8,
-          display: "flex", flexDirection: "column", gap: 4, minWidth: 180,
-        }}>
-          <div><b>📊 통계</b></div>
-          <div>가우시안: {stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()} 슬롯`}</div>
-          <div>바운드: {stats.size.map((v) => v.toFixed(2)).join(" × ")}</div>
-          <div>선택: {selection.size.toLocaleString()}</div>
-          <div>메모리: {stats.mb.toFixed(1)} MB</div>
+        <div className="panel" style={{ right: 10, bottom: 10, minWidth: 200 }}>
+          <div className="panel-section" style={{ gap: 6 }}>
+            <div className="panel-title">📊 통계</div>
+            <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">가우시안</span><span className="num">{stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()}`}</span></div>
+            <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">바운드</span><span className="num">{stats.size.map((v) => v.toFixed(2)).join(" × ")}</span></div>
+            <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">선택</span><span className="num">{selection.size.toLocaleString()}</span></div>
+            <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">메모리</span><span className="num">{stats.mb.toFixed(1)} MB</span></div>
+          </div>
         </div>
       )}
 
@@ -298,7 +481,7 @@ export default function App() {
           position: "absolute", zIndex: 2, pointerEvents: "none",
           left: Math.min(drag.x0, drag.x1), top: Math.min(drag.y0, drag.y1),
           width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0),
-          border: "1px solid #ff8800", background: "rgba(255,136,0,0.15)",
+          border: "1.5px solid var(--accent)", background: "rgba(255,139,61,0.15)", borderRadius: 4,
         }} />
       )}
 
@@ -306,16 +489,19 @@ export default function App() {
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
-        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} />
+        <CameraBridge viewRef={viewRef} />
+        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
-        {buffer && bounds && selection.size > 0 && (
+        {buffer && bounds && selection.size > 0 && !measureMode && (
           <DragMoveHandle buffer={buffer} selection={selection} onCommit={moveSelection} size={radius(bounds) * 0.04} />
         )}
+        {bounds && measurePts.length > 0 && <MeasureView points={measurePts} size={radius(bounds) * 0.03} />}
         <RenderSettingsContext.Provider value={settings}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
           {display && bounds && (
             <>
-              <FitCamera bounds={bounds} />
+              <FitCamera bounds={bounds} enabled={!camDone && !pendingView.current} onFitted={() => setCamDone(true)} />
+              {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
                 <SplatObject buffer={display} />
               </SplatRenderContext>
