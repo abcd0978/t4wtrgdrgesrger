@@ -1,6 +1,7 @@
 import React from "react";
 import { type RenderSettings, DEFAULT_SETTINGS } from "../RenderSettings";
 import { type GridOpts } from "./SceneObjects";
+import { type Bounds } from "../lib/bounds";
 
 function NumSlider({
   label, k, min, max, step, settings, setSettings,
@@ -32,6 +33,7 @@ export interface SceneOpts {
   restoreBookmark: (i: number) => void;
   deleteBookmark: (i: number) => void;
   rotateScene: (axis: 0 | 1 | 2, deg: number) => void;
+  bounds: Bounds | null;
 }
 
 export function SettingsPanel({
@@ -42,7 +44,8 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene } = scene;
+  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds } = scene;
+  const ca = settings.clipAxis;
   return (
     <div className="scroll" style={{
       position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
@@ -75,6 +78,30 @@ export function SettingsPanel({
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)</label>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
+
+      <b>클리핑 (단면)</b>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input type="checkbox" checked={ca >= 0} disabled={!bounds} onChange={(e) => {
+          if (!e.target.checked) setSettings((s) => ({ ...s, clipAxis: -1 }));
+          else if (bounds) setSettings((s) => ({ ...s, clipAxis: 0, clipPos: (bounds.min[0] + bounds.max[0]) / 2 }));
+        }} /> 단면 보기
+      </label>
+      {ca >= 0 && bounds && (
+        <>
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["X", "Y", "Z"] as const).map((ax, i) => (
+              <button key={ax} className={ca === i ? "active" : ""} style={{ flex: 1 }} onClick={() => setSettings((s) => ({ ...s, clipAxis: i, clipPos: (bounds.min[i] + bounds.max[i]) / 2 }))}>{ax}</button>
+            ))}
+            <button className="ghost" onClick={() => setSettings((s) => ({ ...s, clipSign: -s.clipSign }))} title="자르는 쪽 반전">⇄</button>
+          </div>
+          <input type="range"
+            min={bounds.min[ca]} max={bounds.max[ca]}
+            step={(bounds.max[ca] - bounds.min[ca]) / 200 || 0.001}
+            value={settings.clipPos}
+            onChange={(e) => setSettings((s) => ({ ...s, clipPos: parseFloat(e.target.value) }))}
+            style={{ width: "100%" }} />
+        </>
+      )}
 
       <b>성능 (LOD)</b>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>

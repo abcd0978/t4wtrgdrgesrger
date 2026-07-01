@@ -30,6 +30,9 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     cullThreshold: 0.01,
     falloffCutoff: 4.0,
     alphaTest: 0.01,
+    clipAxis: -1.0,
+    clipPos: 0.0,
+    clipSign: 1.0,
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
   precision mediump float;
@@ -62,6 +65,11 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
   uniform float blur;
   uniform float opacityScale;
   uniform float cullThreshold;
+
+  // Clipping plane (axis-aligned): clipAxis -1 = off.
+  uniform float clipAxis;
+  uniform float clipPos;
+  uniform float clipSign;
 
   out vec4 vRgba;
   out vec2 vPosition;
@@ -101,6 +109,13 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
 
     // Get center wrt camera. modelViewMatrix is T_cam_world.
     vec3 center = uintBitsToFloat(floatBufferData.xyz);
+
+    // Clipping plane: drop gaussians on the cut side.
+    if (clipAxis > -0.5) {
+      float coord = clipAxis < 0.5 ? center.x : (clipAxis < 1.5 ? center.y : center.z);
+      if ((coord - clipPos) * clipSign > 0.0) return;
+    }
+
     vec4 c_cam = T_camera_group * vec4(center, 1);
     if (-c_cam.z < near || -c_cam.z > far)
       return;

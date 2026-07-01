@@ -584,6 +584,9 @@ function SplatRendererImpl() {
     uniforms.cullThreshold.value = settings.cullThreshold;
     uniforms.falloffCutoff.value = settings.falloffCutoff;
     uniforms.alphaTest.value = settings.alphaTest;
+    uniforms.clipAxis.value = settings.clipAxis;
+    uniforms.clipPos.value = settings.clipPos;
+    uniforms.clipSign.value = settings.clipSign;
     uniforms.transitionInState.value = Math.min(
       uniforms.transitionInState.value + delta * settings.fadeSpeed,
       1.0,
