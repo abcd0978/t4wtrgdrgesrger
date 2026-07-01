@@ -258,20 +258,94 @@ export function InputController({
   return null;
 }
 
-/** Exposes a canvas->PNG capture fn via captureRef (needs `gl`, so lives inside
- * Canvas). Canvas must use preserveDrawingBuffer or toBlob comes back blank. */
+/** Exposes a canvas->PNG capture fn via captureRef and the canvas element via
+ * canvasRef (for video recording). Needs `gl`, so lives inside Canvas; Canvas
+ * must use preserveDrawingBuffer or toBlob comes back blank. */
 export function CanvasCapture({
-  captureRef, download,
+  captureRef, canvasRef, download,
 }: {
   captureRef: React.MutableRefObject<((name: string) => void) | null>;
+  canvasRef?: React.MutableRefObject<HTMLCanvasElement | null>;
   download: (blob: Blob, name: string) => void;
 }) {
   const gl = useThree((s) => s.gl);
   React.useEffect(() => {
     captureRef.current = (name) =>
       gl.domElement.toBlob((b) => { if (b) download(b, name); }, "image/png");
-    return () => { captureRef.current = null; };
-  }, [gl, download]);
+    if (canvasRef) canvasRef.current = gl.domElement;
+    return () => { captureRef.current = null; if (canvasRef) canvasRef.current = null; };
+  }, [gl, download, canvasRef]);
+  return null;
+}
+
+export type CamPose = { p: [number, number, number]; t: [number, number, number]; ms: number };
+
+/** Record the camera pose (pos + orbit target) over time into recRef while
+ * `recording`, and replay it (interpolated) while `playing`. Time is accumulated
+ * from frame deltas so it's independent of framerate. */
+export function CameraPath({ recording, playing, recRef, path, onPlayEnd }: {
+  recording: boolean;
+  playing: boolean;
+  recRef: React.MutableRefObject<CamPose[]>;
+  path: CamPose[];
+  onPlayEnd: () => void;
+}) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
+  const recT = React.useRef(0), lastSample = React.useRef(-1), prevRec = React.useRef(false);
+  const playT = React.useRef(0), prevPlay = React.useRef(false);
+  useFrame((_, delta) => {
+    const dt = Math.min(delta, 0.1);
+    if (recording) {
+      if (!prevRec.current) { recRef.current = []; recT.current = 0; lastSample.current = -1; }
+      recT.current += dt;
+      if (recT.current - lastSample.current >= 0.05) { // ~20 samples/s
+        lastSample.current = recT.current;
+        const t = controls?.target;
+        recRef.current.push({
+          p: [camera.position.x, camera.position.y, camera.position.z],
+          t: t ? [t.x, t.y, t.z] : [0, 0, 0],
+          ms: recT.current,
+        });
+      }
+    }
+    prevRec.current = recording;
+
+    if (playing && path.length >= 2 && controls) {
+      if (!prevPlay.current) playT.current = 0;
+      playT.current += dt;
+      const end = path[path.length - 1].ms;
+      if (playT.current >= end) { onPlayEnd(); }
+      else {
+        let i = 1;
+        while (i < path.length && path[i].ms < playT.current) i++;
+        const a = path[i - 1], b = path[i];
+        const u = Math.min(1, Math.max(0, (playT.current - a.ms) / ((b.ms - a.ms) || 1)));
+        camera.position.set(a.p[0] + (b.p[0] - a.p[0]) * u, a.p[1] + (b.p[1] - a.p[1]) * u, a.p[2] + (b.p[2] - a.p[2]) * u);
+        controls.target.set(a.t[0] + (b.t[0] - a.t[0]) * u, a.t[1] + (b.t[1] - a.t[1]) * u, a.t[2] + (b.t[2] - a.t[2]) * u);
+        controls.update();
+      }
+    }
+    prevPlay.current = playing;
+  });
+  return null;
+}
+
+/** Auto-orbit: slowly revolve the camera around the target about world-up (z),
+ * like a turntable, for hands-free review / recording. */
+export function AutoOrbit({ enabled, speed }: { enabled: boolean; speed: number }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
+  useFrame((_, delta) => {
+    if (!enabled || !controls) return;
+    const t = controls.target;
+    const dx = camera.position.x - t.x, dy = camera.position.y - t.y;
+    const a = speed * Math.min(delta, 0.05);
+    const c = Math.cos(a), s = Math.sin(a);
+    camera.position.x = t.x + dx * c - dy * s;
+    camera.position.y = t.y + dx * s + dy * c;
+    controls.update();
+  });
   return null;
 }
 

@@ -1,5 +1,10 @@
 # 변경 내역 (Changelog)
 
+## 자동 공전 + 카메라 경로 녹화/재생
+
+- **자동 회전(공전)** — `카메라 ▾ 자동 회전`: 타깃을 중심으로 카메라가 천천히 공전(턴테이블). 재생 중엔 자동 비활성.
+- **카메라 경로 녹화 → 재생** — `카메라 ▾ 경로 녹화`로 카메라 pose(위치+타깃)를 ~20/s로 시간축 녹화, `▶ 경로 재생`으로 보간 재생(프레임레이트 무관). 반복 리뷰용 플라이스루. (비디오 내보내기는 후순위)
+
 ## .npz 내보내기 (데이터 contract)
 
 - `파일 ▾ .npz 내보내기` — 살아있는 가우시안을 데이터 contract(mean_xyz·color_rgb·opacity·scale_xyz·rotation_xyzw·source_frame_index) npz로 저장. 의존성 없는 npy+STORE zip 라이터(`src/lib/npzWrite.ts`), 우리 리더/numpy 호환. `npm test`에 왕복 셀프체크 추가.

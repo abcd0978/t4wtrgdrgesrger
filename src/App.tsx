@@ -8,7 +8,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
@@ -111,6 +111,11 @@ export default function App() {
   const [measureMode, setMeasureMode] = React.useState(false);
   const [measurePts, setMeasurePts] = React.useState<[number, number, number][]>([]);
   const [camDone, setCamDone] = React.useState(false); // first fit / URL view applied
+  const [autoOrbit, setAutoOrbit] = React.useState(false);
+  const [camRecording, setCamRecording] = React.useState(false);
+  const [camReplaying, setCamReplaying] = React.useState(false);
+  const [camPath, setCamPath] = React.useState<CamPose[]>([]);
+  const camRecRef = React.useRef<CamPose[]>([]);
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
@@ -810,6 +815,24 @@ export default function App() {
     setBookmarks((b) => b.filter((_, j) => j !== i));
   }
 
+  // Camera path record / replay.
+  function toggleCamRecord() {
+    if (camRecording) {
+      setCamRecording(false);
+      setCamPath(camRecRef.current.slice());
+      setStatus(`카메라 경로 녹화됨 (${camRecRef.current.length} keyframes)`);
+    } else {
+      setCamReplaying(false);
+      setCamRecording(true);
+      setStatus("카메라 경로 녹화 중… (카메라를 움직이세요)");
+    }
+  }
+  function playCamPath() {
+    if (camPath.length < 2) { setStatus("녹화된 카메라 경로가 없음"); return; }
+    setCamRecording(false);
+    setCamReplaying(true);
+  }
+
   // Put the camera at the world origin (where the axes gizmo sits — usually the
   // capture/reference origin), looking at the data centre.
   function cameraToOrigin() {
@@ -858,6 +881,12 @@ export default function App() {
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{buffer2 ? " ●" : ""}</button>
+        </Dropdown>
+        <Dropdown label={`카메라${autoOrbit || camRecording || camReplaying ? " ●" : ""}`} className="menu-only">
+          <button className={autoOrbit ? "active" : ""} onClick={() => setAutoOrbit((v) => !v)}>자동 회전 (공전)</button>
+          <button className={camRecording ? "active danger" : ""} onClick={toggleCamRecord} disabled={!buffer}>{camRecording ? "■ 녹화 정지" : "● 카메라 경로 녹화"}</button>
+          <button onClick={playCamPath} disabled={camPath.length < 2 || camReplaying}>{camReplaying ? "재생 중…" : `▶ 경로 재생${camPath.length ? ` (${camPath.length}f)` : ""}`}</button>
+          {camReplaying && <button onClick={() => setCamReplaying(false)}>■ 재생 정지</button>}
         </Dropdown>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         {hasTimeline && <button className={live ? "active" : ""} onClick={() => setLive((v) => !v)} title="새 delta 프레임 자동 폴링">{live ? "● 라이브" : "라이브"}</button>}
@@ -1028,6 +1057,8 @@ export default function App() {
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}
+        <AutoOrbit enabled={autoOrbit && !camReplaying} speed={0.5} />
+        <CameraPath recording={camRecording} playing={camReplaying} recRef={camRecRef} path={camPath} onPlayEnd={() => setCamReplaying(false)} />
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />
