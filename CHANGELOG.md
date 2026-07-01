@@ -1,5 +1,10 @@
 # 변경 내역 (Changelog)
 
+## Redo + 키보드 단축키 (#21)
+
+- **Redo** 추가(undo/redo 스택). 새 편집 시 redo 스택은 무효화. 툴바에 `redo` 버튼.
+- **단축키** — Ctrl/Cmd+Z 실행취소, Ctrl+Shift+Z(·Ctrl+Y) 다시실행, Delete/Backspace 선택 삭제, Esc 선택 해제. (입력창 포커스 중엔 무시)
+
 ## 선택 회전 각도 슬라이더
 
 - 선택 회전이 고정 15°였던 걸, 이동 step처럼 **각도 슬라이더(1~90°)** 로 설정 후 X/Y/Z ⟲/⟳ 적용하도록 변경.

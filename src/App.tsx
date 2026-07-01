@@ -35,7 +35,8 @@ const HELP = [
   ["타임라인 (delta)", "▶ 재생 · 속도 · 구간 지정 → 구간 .ply"],
   ["PLY 열기 / 내보내기 / 공유", "로컬 .ply 로드 · .ply 저장 · 링크"],
   ["스크린샷", "현재 화면 PNG 저장"],
-  ["undo / reset", "되돌리기 / 처음으로"],
+  ["undo / redo / reset", "Ctrl+Z / Ctrl+Shift+Z / 처음으로"],
+  ["Delete / Esc", "선택 삭제 / 선택 해제"],
   ["⚙ 버튼", "렌더 설정 열기"],
 ];
 
@@ -70,6 +71,7 @@ export default function App() {
   const [selecting, setSelecting] = React.useState(false);
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
+  const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
   const [moveStep, setMoveStep] = React.useState(0.05);
   const [rotStep, setRotStep] = React.useState(15); // selection rotation step (deg)
@@ -122,7 +124,7 @@ export default function App() {
     const _host = over?.host ?? host, _run = over?.runId ?? runId;
     const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
     setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
-    setUndoStack([]); setLiveBuffer(null); originalBuffer.current = null;
+    setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false);
     try {
       let final: Uint32Array | null = null;
@@ -207,12 +209,18 @@ export default function App() {
 
   bufferRef.current = displayBuffer; // pick against what's actually visible
 
+  // Snapshot for undo; any new edit invalidates the redo stack.
+  function pushUndo(buf: Uint32Array) {
+    setUndoStack((s) => [...s.slice(-29), buf]);
+    setRedoStack([]);
+  }
+
   // One edit primitive for move/delete/recolor: snapshot for undo, copy, mutate
   // the selected gaussians, swap the ref. Same length -> renderer updates the
   // texture in place (no remount, no bounds re-scan): keeps edits snappy.
   function commitEdit(mutate: (dv: DataView, base: number) => void, msg: string) {
     if (!buffer || selection.size === 0) return;
-    setUndoStack((s) => [...s.slice(-29), buffer]);
+    pushUndo(buffer);
     const nb = buffer.slice();
     const dv = new DataView(nb.buffer);
     for (const i of selection) mutate(dv, i * 32);
@@ -245,7 +253,7 @@ export default function App() {
   function liveTransform(mutate: (odv: DataView, wdv: DataView, base: number, c: [number, number, number]) => void, msg: string) {
     const orig = editOrigin.current, work = workBuf.current;
     if (!orig || !work) return;
-    if (!editMoved.current) { editMoved.current = true; setUndoStack((s) => [...s.slice(-29), orig]); }
+    if (!editMoved.current) { editMoved.current = true; pushUndo(orig); }
     const odv = new DataView(orig.buffer, orig.byteOffset, orig.byteLength);
     const wdv = new DataView(work.buffer);
     for (const i of selection) mutate(odv, wdv, i * 32, editCenter.current);
@@ -322,7 +330,7 @@ export default function App() {
     if (!buffer || !bounds) return;
     const c = center(bounds);
     const R = rotationAboutAxis(axis, (deg * Math.PI) / 180);
-    setUndoStack((s) => [...s.slice(-29), buffer]);
+    pushUndo(buffer);
     const nb = buffer.slice();
     const dv = new DataView(nb.buffer);
     const slots = nb.length / 8;
@@ -372,7 +380,7 @@ export default function App() {
       newSel.add(w / 8);
       w += 8;
     }
-    setUndoStack((s) => [...s.slice(-29), buffer]);
+    pushUndo(buffer);
     setBuffer(nb); setBounds(computeBounds(nb)); setSelection(newSel);
     setStatus(`duplicated ${sel.length} gaussians`);
   }
@@ -438,7 +446,7 @@ export default function App() {
     e.target.value = ""; // allow re-picking the same file
     if (!file) return;
     setBusy(true); setStatus(`reading ${file.name}…`);
-    setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]);
+    setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     setPlaying(false); setCamDone(false); pendingView.current = null;
     try {
@@ -508,22 +516,47 @@ export default function App() {
   }, [buffer, bounds]);
 
   function undo() {
-    setUndoStack((s) => {
-      if (s.length === 0) return s;
-      const prev = s[s.length - 1];
-      setBuffer(prev); setBounds(computeBounds(prev)); setLiveBuffer(null);
-      setSplatKey((k) => k + 1);
-      return s.slice(0, -1);
-    });
+    if (undoStack.length === 0 || !buffer) return;
+    const prev = undoStack[undoStack.length - 1];
+    setRedoStack((r) => [...r.slice(-29), buffer]);
+    setUndoStack((s) => s.slice(0, -1));
+    setBuffer(prev); setBounds(computeBounds(prev)); setLiveBuffer(null);
+    setSplatKey((k) => k + 1);
+  }
+  function redo() {
+    if (redoStack.length === 0 || !buffer) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack((s) => [...s.slice(-29), buffer]);
+    setRedoStack((r) => r.slice(0, -1));
+    setBuffer(next); setBounds(computeBounds(next)); setLiveBuffer(null);
+    setSplatKey((k) => k + 1);
   }
   function reset() {
     const ob = originalBuffer.current;
     if (!ob) return;
     const copy = ob.slice();
     setBuffer(copy); setBounds(computeBounds(copy));
-    setSelection(new Set()); setUndoStack([]); setLiveBuffer(null);
+    setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
     setSplatKey((k) => k + 1);
   }
+
+  // Keyboard shortcuts: Ctrl/Cmd+Z undo, +Shift/Ctrl+Y redo, Delete, Esc clear.
+  // Latest handlers via ref so the listener binds once.
+  const keyRef = React.useRef({ undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: false });
+  keyRef.current = { undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: selection.size > 0 };
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA")) return;
+      const k = keyRef.current, key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "z") { e.preventDefault(); if (e.shiftKey) k.redo(); else k.undo(); }
+      else if ((e.ctrlKey || e.metaKey) && key === "y") { e.preventDefault(); k.redo(); }
+      else if ((key === "delete" || key === "backspace") && k.hasSel) { e.preventDefault(); k.del(); }
+      else if (key === "escape") { k.clearSel(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const display = liveBuffer ?? displayBuffer;
 
@@ -594,6 +627,7 @@ export default function App() {
         <input ref={fileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onPlyFile} />
         <button className="menu-only" onClick={() => fileRef.current?.click()} disabled={busy} title="로컬 .ply 파일 열기">PLY 열기</button>
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
+        <button onClick={redo} disabled={redoStack.length === 0}>redo</button>
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
