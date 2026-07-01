@@ -21,7 +21,7 @@ import { readUrlState, buildShareUrl } from "./lib/urlState";
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
 type View = { p: [number, number, number]; t: [number, number, number] };
 type Group = { id: number; name: string; indices: number[]; hidden: boolean; color: string };
-type CompareItem = { id: number; name: string; buffer: Uint32Array; visible: boolean; offset: number };
+type CompareItem = { id: number; name: string; buffer: Uint32Array; visible: boolean };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const FPS_MIN = 0.5, FPS_MAX = 60;
 
@@ -691,10 +691,7 @@ export default function App() {
   // its own x-offset, visibility, and remove. "편집" swaps one in as the main
   // (editable) buffer so the existing double-click / drag selection works on it.
   function addCompare(name: string, b: Uint32Array) {
-    setCompares((cs) => {
-      const step = bounds ? radius(bounds) * 2.2 : 3;
-      return [...cs, { id: compareIdRef.current++, name, buffer: b, visible: true, offset: (cs.length + 1) * step }];
-    });
+    setCompares((cs) => [...cs, { id: compareIdRef.current++, name, buffer: b, visible: true }]);
   }
   async function loadCompare() {
     if (!run2) return;
@@ -721,23 +718,38 @@ export default function App() {
     } finally { setBusy2(false); }
   }
   function toggleCompare(id: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, visible: !c.visible } : c)); }
-  function setCompareOff(id: number, off: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, offset: off } : c)); }
   function removeCompare(id: number) { setCompares((cs) => cs.filter((c) => c.id !== id)); }
   function clearCompare() { setCompares([]); }
-  // Make a compare overlay the active/editable main buffer; the old main gets
-  // pushed back into the compare list so nothing is lost.
-  function switchToMain(item: CompareItem) {
-    if (!buffer) return;
-    const step = bounds ? radius(bounds) * 2.2 : 3;
-    const oldMain: CompareItem = { id: compareIdRef.current++, name: runId || "이전 run", buffer, visible: true, offset: step };
-    setCompares((cs) => [oldMain, ...cs.filter((c) => c.id !== item.id)]);
-    setRunId(item.name);
-    setBuffer(item.buffer); setBounds(computeBounds(item.buffer));
-    originalBuffer.current = item.buffer.slice();
+  // Replace the whole scene with `b`: it becomes the active/editable main buffer
+  // (selection, gizmos, scene-rotation all act on it). Keeps the camera.
+  function becomeScene(name: string, b: Uint32Array) {
+    setRunId(name);
+    setBuffer(b); setBounds(computeBounds(b));
+    originalBuffer.current = b.slice();
     setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
-    setSplatKey((k) => k + 1); // remount so the new run inits + sorts without needing a camera move
+    setSplatKey((k) => k + 1); // remount so the new scene inits + sorts without a camera move
+  }
+  // Make a compare overlay the scene; the old main is pushed back as an overlay.
+  function switchToMain(item: CompareItem) {
+    if (!buffer) return;
+    const oldMain: CompareItem = { id: compareIdRef.current++, name: runId || "이전 run", buffer, visible: true };
+    setCompares((cs) => [oldMain, ...cs.filter((c) => c.id !== item.id)]);
+    becomeScene(item.name, item.buffer);
     setStatus(`편집 대상 → ${item.name} (${item.buffer.length / 8} gaussians)`);
+  }
+  // Merge the current scene + all visible overlays into one buffer.
+  function mergeScenes() {
+    if (!buffer) return;
+    const shown = compares.filter((c) => c.visible);
+    if (shown.length === 0) { setStatus("합칠 오버레이가 없음 (보이는 것만 합쳐짐)"); return; }
+    const parts = [buffer, ...shown.map((c) => c.buffer)];
+    const merged = new Uint32Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0;
+    for (const p of parts) { merged.set(p, o); o += p.length; }
+    setCompares((cs) => cs.filter((c) => !c.visible)); // merged ones consumed; hidden ones kept
+    becomeScene(runId || "merged", merged);
+    setStatus(`씬 합치기: ${parts.length}개 → ${merged.length / 8} gaussians`);
   }
 
   // Timeline auto-play: advance the scrub frame, looping within the [in,out] clip.
@@ -1071,7 +1083,7 @@ export default function App() {
       )}
 
       {showCompare && (
-        <FloatingPanel title="⚖ 다중 run 비교" onClose={() => setShowCompare(false)} style={{ top: 62, right: 8 }} width="min(250px, calc(100vw - 20px))">
+        <FloatingPanel title="⚖ 다중 run 비교" onClose={() => setShowCompare(false)} style={{ top: 62, right: 8 }} width="min(360px, calc(100vw - 20px))">
           <span className="muted" style={{ fontSize: 12 }}>두 번째 대상을 겹쳐 표시 (서버 run 또는 PLY 파일)</span>
           <select value={run2} onChange={(e) => setRun2(e.target.value)}>
             <option value="">(서버 run 선택)</option>
@@ -1085,19 +1097,19 @@ export default function App() {
           {compares.length > 0 && (
             <>
               <hr className="divider" />
-              <span className="muted" style={{ fontSize: 12 }}>겹친 run · "편집"으로 편집 대상 전환</span>
+              <span className="muted" style={{ fontSize: 12 }}>겹친 run · "편집"으로 씬 전환, "합치기"로 하나로</span>
               {compares.map((c) => (
-                <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div className="row" style={{ gap: 5 }}>
-                    <button className="ghost icon" onClick={() => toggleCompare(c.id)} title={c.visible ? "숨기기" : "보이기"}>{c.visible ? "👁" : "🚫"}</button>
-                    <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", opacity: c.visible ? 1 : 0.5, fontSize: 12 }} title={c.name}>{c.name}</span>
-                    <button onClick={() => switchToMain(c)} title="이 run을 편집 대상(메인)으로">편집</button>
-                    <button className="ghost icon" onClick={() => removeCompare(c.id)} title="제거">✕</button>
-                  </div>
-                  <input type="range" title="가로 오프셋" min={0} max={bounds ? radius(bounds) * 6 : 20} step={bounds ? radius(bounds) / 100 : 0.1} value={c.offset} onChange={(e) => setCompareOff(c.id, parseFloat(e.target.value))} style={{ width: "100%" }} />
+                <div key={c.id} className="row" style={{ gap: 5 }}>
+                  <button className="ghost icon" onClick={() => toggleCompare(c.id)} title={c.visible ? "숨기기" : "보이기"}>{c.visible ? "👁" : "🚫"}</button>
+                  <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", opacity: c.visible ? 1 : 0.5 }} title={c.name}>{c.name} · {(c.buffer.length / 8).toLocaleString()}</span>
+                  <button onClick={() => switchToMain(c)} title="이 run을 편집 대상(씬)으로">편집</button>
+                  <button className="ghost icon" onClick={() => removeCompare(c.id)} title="제거">✕</button>
                 </div>
               ))}
-              <button className="danger" onClick={clearCompare}>비교 모두 지우기</button>
+              <div className="row" style={{ gap: 6 }}>
+                <button className="grow" onClick={mergeScenes} title="현재 씬 + 보이는 오버레이를 하나의 버퍼로 합침">🧩 씬 합치기</button>
+                <button className="danger" onClick={clearCompare}>모두 지우기</button>
+              </div>
             </>
           )}
         </FloatingPanel>
@@ -1258,11 +1270,7 @@ export default function App() {
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
                 {showMap && <SplatObject buffer={lod ?? display} />}
-                {compares.map((c) => c.visible && (
-                  <group key={c.id} position={[c.offset, 0, 0]}>
-                    <SplatObject buffer={c.buffer} />
-                  </group>
-                ))}
+                {compares.map((c) => c.visible && <SplatObject key={c.id} buffer={c.buffer} />)}
               </SplatRenderContext>
             </>
           )}
