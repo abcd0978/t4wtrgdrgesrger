@@ -66,6 +66,11 @@ export default function App() {
   const [showGroups, setShowGroups] = React.useState(false);
   const [groups, setGroups] = React.useState<Group[]>([]);
   const groupIdRef = React.useRef(1);
+  const [showCompare, setShowCompare] = React.useState(false);
+  const [run2, setRun2] = React.useState("");
+  const [buffer2, setBuffer2] = React.useState<Uint32Array | null>(null);
+  const [busy2, setBusy2] = React.useState(false);
+  const [compareOffset, setCompareOffset] = React.useState(0);
   const [showFilter, setShowFilter] = React.useState(false);
   const [filterColor, setFilterColor] = React.useState("#ffffff");
   const [filterTol, setFilterTol] = React.useState(60);
@@ -623,6 +628,20 @@ export default function App() {
     } finally { setBusy(false); }
   }
 
+  // Multi-run compare: load a second run (snapshot) as a static overlay.
+  async function loadCompare() {
+    if (!run2) return;
+    setBusy2(true); setStatus(`compare: fetching ${run2}…`);
+    try {
+      const b = npzToPacked(await unzipNpz(await getSnapshot(host, run2)));
+      setBuffer2(b);
+      setStatus(`compare: ${run2} — ${b.length / 8} gaussians`);
+    } catch (e) {
+      setStatus("compare error: " + (e as Error).message);
+    } finally { setBusy2(false); }
+  }
+  function clearCompare() { setBuffer2(null); }
+
   // Timeline auto-play: advance the scrub frame, looping within the [in,out] clip.
   React.useEffect(() => {
     if (!playing || !frameCum) return;
@@ -783,10 +802,11 @@ export default function App() {
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
-        <Dropdown label={`도구${measureMode || showFilter || showGroups ? " ●" : ""}`} className="menu-only">
+        <Dropdown label={`도구${measureMode || showFilter || showGroups || showCompare || buffer2 ? " ●" : ""}`} className="menu-only">
           <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
+          <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{buffer2 ? " ●" : ""}</button>
         </Dropdown>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         {hasTimeline && <button className={live ? "active" : ""} onClick={() => setLive((v) => !v)} title="새 delta 프레임 자동 폴링">{live ? "● 라이브" : "라이브"}</button>}
@@ -862,6 +882,31 @@ export default function App() {
         />
       )}
 
+      {showCompare && (
+        <div className="panel scroll" style={{ top: 62, right: 8, width: "min(250px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
+          <div className="panel-section">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="panel-title">⚖ 다중 run 비교</span>
+              <button className="ghost icon" onClick={() => setShowCompare(false)}>✕</button>
+            </div>
+            <span className="muted" style={{ fontSize: 12 }}>두 번째 run을 스냅샷으로 겹쳐 표시</span>
+            <select value={run2} onChange={(e) => setRun2(e.target.value)}>
+              <option value="">(run 선택)</option>
+              {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
+            </select>
+            <button onClick={loadCompare} disabled={busy2 || !run2}>{busy2 ? "…" : "겹쳐 로드"}</button>
+            {buffer2 && (
+              <>
+                <label className="row muted">가로 오프셋
+                  <input type="range" className="grow" min={0} max={bounds ? radius(bounds) * 4 : 10} step={bounds ? radius(bounds) / 100 : 0.1} value={compareOffset} onChange={(e) => setCompareOffset(parseFloat(e.target.value))} />
+                </label>
+                <button className="danger" onClick={clearCompare}>비교 지우기</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {timelineVisible && (
         <div className="panel" style={{ bottom: 10, left: 10, right: 10 }}>
           <div className="panel-section" style={{ gap: 12 }}>
@@ -932,6 +977,11 @@ export default function App() {
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
                 <SplatObject buffer={lod ?? display} />
+                {buffer2 && (
+                  <group position={[compareOffset, 0, 0]}>
+                    <SplatObject buffer={buffer2} />
+                  </group>
+                )}
               </SplatRenderContext>
             </>
           )}
