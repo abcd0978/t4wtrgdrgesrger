@@ -728,8 +728,8 @@ export default function App() {
             </div>
 
             <label className="row muted">이동
-              <input type="range" className="grow" min={0.01} max={1} step={0.01} value={moveStep} onChange={(e) => setMoveStep(parseFloat(e.target.value))} />
-              <span className="num" style={{ width: 36, textAlign: "right" }}>{moveStep}</span>
+              <input type="range" className="grow" min={0.01} max={1} step={0.01} value={Math.min(moveStep, 1)} onChange={(e) => setMoveStep(parseFloat(e.target.value))} />
+              <input type="number" className="num" min={0} step={0.05} value={moveStep} onChange={(e) => setMoveStep(Math.max(0, parseFloat(e.target.value) || 0))} style={{ width: 54 }} />
             </label>
             {([["X", 0], ["Y", 1], ["Z", 2]] as const).map(([ax, i]) => (
               <div key={ax} className="seg">
@@ -742,8 +742,8 @@ export default function App() {
             <hr className="divider" />
             <div className="muted">회전 / 스케일</div>
             <label className="row muted">각도
-              <input type="range" className="grow" min={1} max={90} step={1} value={rotStep} onChange={(e) => setRotStep(parseInt(e.target.value))} />
-              <span className="num" style={{ width: 36, textAlign: "right" }}>{rotStep}°</span>
+              <input type="range" className="grow" min={1} max={90} step={1} value={Math.min(rotStep, 90)} onChange={(e) => setRotStep(parseInt(e.target.value))} />
+              <input type="number" className="num" min={0} max={360} step={1} value={rotStep} onChange={(e) => setRotStep(Math.max(0, parseInt(e.target.value) || 0))} style={{ width: 54 }} />
             </label>
             {(["X", "Y", "Z"] as const).map((ax, i) => (
               <div key={ax} className="seg">
