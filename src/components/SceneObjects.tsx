@@ -280,7 +280,14 @@ export function CanvasCapture({
 
 export type CamPose = { p: [number, number, number]; t: [number, number, number]; ms: number };
 
-/** Interpolated camera pose at time `ms` along a recorded path. */
+// Catmull-Rom: smooth curve through p1,p2 using neighbours p0,p3 as tangents.
+function catmull(p0: number, p1: number, p2: number, p3: number, u: number) {
+  const u2 = u * u, u3 = u2 * u;
+  return 0.5 * (2 * p1 + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3);
+}
+
+/** Interpolated camera pose at time `ms` along a path, using a Catmull-Rom
+ * spline so it curves smoothly through the keyframes instead of cornering. */
 function poseAt(path: CamPose[], ms: number): CamPose | null {
   if (path.length === 0) return null;
   if (ms <= path[0].ms) return path[0];
@@ -288,11 +295,13 @@ function poseAt(path: CamPose[], ms: number): CamPose | null {
   if (ms >= last.ms) return last;
   let i = 1;
   while (i < path.length && path[i].ms < ms) i++;
-  const a = path[i - 1], b = path[i];
+  const n = path.length;
+  const at = (k: number) => path[Math.max(0, Math.min(n - 1, k))]; // clamp neighbours at ends
+  const p0 = at(i - 2), a = path[i - 1], b = path[i], p3 = at(i + 1);
   const u = (ms - a.ms) / ((b.ms - a.ms) || 1);
-  const lp = (k: number) => a.p[k] + (b.p[k] - a.p[k]) * u;
-  const lt = (k: number) => a.t[k] + (b.t[k] - a.t[k]) * u;
-  return { p: [lp(0), lp(1), lp(2)], t: [lt(0), lt(1), lt(2)], ms };
+  const cp = (k: number) => catmull(p0.p[k], a.p[k], b.p[k], p3.p[k], u);
+  const ct = (k: number) => catmull(p0.t[k], a.t[k], b.t[k], p3.t[k], u);
+  return { p: [cp(0), cp(1), cp(2)], t: [ct(0), ct(1), ct(2)], ms };
 }
 
 /** Record the camera pose (pos + orbit target) over time into recRef while
