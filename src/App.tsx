@@ -13,6 +13,7 @@ import { packedToPly, parsePly } from "./lib/ply";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
+import { Dropdown } from "./components/Dropdown";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
@@ -771,20 +772,24 @@ export default function App() {
         {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" className="menu-only" style={{ width: 56 }} />}
         <button className="accent" onClick={() => load()} disabled={busy}>{busy ? "…" : "Load"}</button>
         <input ref={fileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onPlyFile} />
-        <button className="menu-only" onClick={() => fileRef.current?.click()} disabled={busy} title="로컬 .ply 파일 열기">PLY 열기</button>
+        <Dropdown label="파일" className="menu-only">
+          <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY 열기</button>
+          <button onClick={exportPly} disabled={!buffer}>.ply 내보내기</button>
+          <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
+          <button onClick={share} disabled={!buffer}>URL 공유</button>
+        </Dropdown>
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
         <button onClick={redo} disabled={redoStack.length === 0}>redo</button>
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
-        <button className={"menu-only" + (measureMode ? " active" : "")} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
-        <button className={"menu-only" + (showFilter ? " active" : "")} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
-        <button className={"menu-only" + (showGroups ? " active" : "")} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
+        <Dropdown label={`도구${measureMode || showFilter || showGroups ? " ●" : ""}`} className="menu-only">
+          <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
+          <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
+          <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
+        </Dropdown>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         {hasTimeline && <button className={live ? "active" : ""} onClick={() => setLive((v) => !v)} title="새 delta 프레임 자동 폴링">{live ? "● 라이브" : "라이브"}</button>}
-        <button className="menu-only" onClick={exportPly} disabled={!buffer}>내보내기</button>
-        <button className="menu-only" onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
-        <button className="menu-only" onClick={share} disabled={!buffer}>공유</button>
         <button className="menu-only" onClick={() => setShowStats((v) => !v)}>통계</button>
         <button className="ghost icon menu-only" onClick={() => setShowHelp((v) => !v)}>?</button>
         <button className="ghost icon menu-only" onClick={() => setShowPanel((v) => !v)}>⚙</button>
