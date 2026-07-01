@@ -12,6 +12,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
@@ -816,77 +817,15 @@ export default function App() {
       )}
 
       {selection.size > 0 && !measureMode && (
-        <div className="panel scroll" style={{ top: 62, left: 10, width: "min(214px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-          <div className="panel-section">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="panel-title">선택 {selection.size.toLocaleString()}개</span>
-              <button className="ghost icon" onClick={() => setSelection(new Set())} title="선택 해제">✕</button>
-            </div>
-            <div className="row">
-              <button className="grow" onClick={invertSelection}>선택 반전</button>
-              <button className="grow" onClick={growSelection} title="선택 영역(박스)을 채워 확장">확장</button>
-            </div>
-
-            <label className="row muted">이동
-              <input type="range" className="grow" min={0.01} max={1} step={0.01} value={Math.min(moveStep, 1)} onChange={(e) => setMoveStep(parseFloat(e.target.value))} />
-              <input type="number" className="num" min={0} step={0.05} value={moveStep} onChange={(e) => setMoveStep(Math.max(0, parseFloat(e.target.value) || 0))} style={{ width: 54 }} />
-            </label>
-            {([["X", 0], ["Y", 1], ["Z", 2]] as const).map(([ax, i]) => (
-              <div key={ax} className="seg">
-                <span className="axis">{ax}</span>
-                <button onClick={() => moveSelection(i === 0 ? -moveStep : 0, i === 1 ? -moveStep : 0, i === 2 ? -moveStep : 0)}>−</button>
-                <button onClick={() => moveSelection(i === 0 ? moveStep : 0, i === 1 ? moveStep : 0, i === 2 ? moveStep : 0)}>＋</button>
-              </div>
-            ))}
-
-            <hr className="divider" />
-            <div className="muted">회전 / 스케일</div>
-            <label className="row muted">각도
-              <input type="range" className="grow" min={1} max={90} step={1} value={Math.min(rotStep, 90)} onChange={(e) => setRotStep(parseInt(e.target.value))} />
-              <input type="number" className="num" min={0} max={360} step={1} value={rotStep} onChange={(e) => setRotStep(Math.max(0, parseInt(e.target.value) || 0))} style={{ width: 54 }} />
-            </label>
-            {(["X", "Y", "Z"] as const).map((ax, i) => (
-              <div key={ax} className="seg">
-                <span className="axis">{ax}</span>
-                <button onClick={() => rotateSelection(i as 0 | 1 | 2, -rotStep)}>⟲</button>
-                <button onClick={() => rotateSelection(i as 0 | 1 | 2, rotStep)}>⟳</button>
-              </div>
-            ))}
-            <div className="seg">
-              <span className="axis">⤢</span>
-              <button onClick={() => scaleSelection(1 / 1.1)}>− 균등</button>
-              <button onClick={() => scaleSelection(1.1)}>＋ 균등</button>
-            </div>
-            <div className="muted" style={{ fontSize: 12 }}>축별 스케일</div>
-            {(["X", "Y", "Z"] as const).map((ax, i) => (
-              <div key={"s" + ax} className="seg">
-                <span className="axis">{ax}</span>
-                <button onClick={() => scaleSelectionXYZ(i === 0 ? 1 / 1.1 : 1, i === 1 ? 1 / 1.1 : 1, i === 2 ? 1 / 1.1 : 1)}>−</button>
-                <button onClick={() => scaleSelectionXYZ(i === 0 ? 1.1 : 1, i === 1 ? 1.1 : 1, i === 2 ? 1.1 : 1)}>＋</button>
-              </div>
-            ))}
-
-            <hr className="divider" />
-            <label className="row muted">색
-              <input type="color" value={editColor} onChange={(e) => setEditColor(e.target.value)} />
-              <span className="grow" />
-              <span className="num">α</span>
-              <input type="range" min={0} max={1} step={0.01} value={editAlpha} onChange={(e) => setEditAlpha(parseFloat(e.target.value))} style={{ width: 72 }} />
-            </label>
-            <button onClick={applyColorOpacity}>색·불투명도 적용</button>
-
-            <hr className="divider" />
-            <div className="row">
-              <button className="grow" onClick={duplicateSelection}>복제</button>
-              <button className="grow" onClick={hideSelection}>숨기기</button>
-            </div>
-            <div className="row">
-              <button className="grow" onClick={isolateSelection}>격리</button>
-              <button className="grow danger" onClick={deleteSelection}>삭제</button>
-            </div>
-            <button onClick={exportSelectionPly}>선택만 .ply 내보내기</button>
-          </div>
-        </div>
+        <SelectionPanel
+          selectionSize={selection.size}
+          onDeselect={() => setSelection(new Set())} onInvert={invertSelection} onGrow={growSelection}
+          moveStep={moveStep} setMoveStep={setMoveStep} onMove={moveSelection}
+          rotStep={rotStep} setRotStep={setRotStep} onRotate={rotateSelection}
+          onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
+          editColor={editColor} setEditColor={setEditColor} editAlpha={editAlpha} setEditAlpha={setEditAlpha} onApplyColor={applyColorOpacity}
+          onDuplicate={duplicateSelection} onHide={hideSelection} onIsolate={isolateSelection} onDelete={deleteSelection} onExportSel={exportSelectionPly}
+        />
       )}
 
       {measureMode && (
@@ -903,58 +842,19 @@ export default function App() {
       )}
 
       {showFilter && (
-        <div className="panel scroll" style={{ top: 62, right: 8, width: "min(230px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-          <div className="panel-section">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="panel-title">🔎 필터 선택</span>
-              <button className="ghost icon" onClick={() => setShowFilter(false)}>✕</button>
-            </div>
-            <label className="row"><input type="checkbox" checked={filterAdd} onChange={(e) => setFilterAdd(e.target.checked)} /> 기존 선택에 추가</label>
-
-            <hr className="divider" />
-            <div className="muted">색 유사도</div>
-            <label className="row">색
-              <input type="color" value={filterColor} onChange={(e) => setFilterColor(e.target.value)} />
-              <span className="grow" />
-              <button className="ghost" onClick={pickColorFromSelection} disabled={selection.size === 0} title="선택의 평균색">선택색</button>
-            </label>
-            <label className="row muted">허용
-              <input type="range" className="grow" min={0} max={300} step={5} value={filterTol} onChange={(e) => setFilterTol(parseInt(e.target.value))} />
-              <span className="num" style={{ width: 32, textAlign: "right" }}>{filterTol}</span>
-            </label>
-            <button onClick={filterByColor}>이 색으로 선택</button>
-
-            <hr className="divider" />
-            <div className="muted">불투명도 범위 (0–255)</div>
-            <div className="row">
-              <input type="number" className="num grow" min={0} max={255} value={filterOpMin} onChange={(e) => setFilterOpMin(Math.max(0, parseInt(e.target.value) || 0))} />
-              <span className="muted">~</span>
-              <input type="number" className="num grow" min={0} max={255} value={filterOpMax} onChange={(e) => setFilterOpMax(Math.max(0, parseInt(e.target.value) || 0))} />
-            </div>
-            <button onClick={filterByOpacity}>불투명도로 선택</button>
-          </div>
-        </div>
+        <FilterPanel
+          onClose={() => setShowFilter(false)} filterAdd={filterAdd} setFilterAdd={setFilterAdd}
+          filterColor={filterColor} setFilterColor={setFilterColor} onPickColor={pickColorFromSelection} canPick={selection.size > 0}
+          filterTol={filterTol} setFilterTol={setFilterTol} onFilterColor={filterByColor}
+          filterOpMin={filterOpMin} setFilterOpMin={setFilterOpMin} filterOpMax={filterOpMax} setFilterOpMax={setFilterOpMax} onFilterOpacity={filterByOpacity}
+        />
       )}
 
       {showGroups && (
-        <div className="panel scroll" style={{ top: 62, right: 8, width: "min(240px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-          <div className="panel-section">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="panel-title">🗂 그룹</span>
-              <button className="ghost icon" onClick={() => setShowGroups(false)}>✕</button>
-            </div>
-            <button onClick={createGroup} disabled={selection.size === 0}>선택을 그룹으로 ({selection.size.toLocaleString()})</button>
-            {groups.length === 0 && <span className="muted" style={{ fontSize: 12 }}>그룹 없음. 선택 후 위 버튼으로 저장.</span>}
-            {groups.map((g) => (
-              <div key={g.id} className="row" style={{ gap: 5 }}>
-                <input type="color" value={g.color} onChange={(e) => recolorGroup(g.id, e.target.value)} title="그룹 색 적용" style={{ width: 26, height: 26, padding: 2, flex: "0 0 auto" }} />
-                <button className="grow" style={{ textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: g.hidden ? 0.5 : 1 }} onClick={() => selectGroup(g)} title="재선택">{g.name} · {g.indices.length.toLocaleString()}</button>
-                <button className="ghost icon" onClick={() => toggleGroupHide(g.id)} title={g.hidden ? "보이기" : "숨기기"}>{g.hidden ? "🚫" : "👁"}</button>
-                <button className="ghost icon" onClick={() => removeGroup(g.id)} title="그룹 해제(가우시안 유지)">✕</button>
-              </div>
-            ))}
-          </div>
-        </div>
+        <GroupPanel
+          onClose={() => setShowGroups(false)} selectionSize={selection.size} groups={groups}
+          onCreate={createGroup} onSelect={selectGroup} onToggleHide={toggleGroupHide} onRecolor={recolorGroup} onRemove={removeGroup}
+        />
       )}
 
       {timelineVisible && (
