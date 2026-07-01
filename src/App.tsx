@@ -21,6 +21,7 @@ import { readUrlState, buildShareUrl } from "./lib/urlState";
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
 type View = { p: [number, number, number]; t: [number, number, number] };
 type Group = { id: number; name: string; indices: number[]; hidden: boolean; color: string };
+type CompareItem = { id: number; name: string; buffer: Uint32Array; visible: boolean; offset: number };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const FPS_MIN = 0.5, FPS_MAX = 60;
 
@@ -70,9 +71,9 @@ export default function App() {
   const groupIdRef = React.useRef(1);
   const [showCompare, setShowCompare] = React.useState(false);
   const [run2, setRun2] = React.useState("");
-  const [buffer2, setBuffer2] = React.useState<Uint32Array | null>(null);
   const [busy2, setBusy2] = React.useState(false);
-  const [compareOffset, setCompareOffset] = React.useState(0);
+  const [compares, setCompares] = React.useState<CompareItem[]>([]);
+  const compareIdRef = React.useRef(1);
   const [showFilter, setShowFilter] = React.useState(false);
   const [filterColor, setFilterColor] = React.useState("#ffffff");
   const [filterTol, setFilterTol] = React.useState(60);
@@ -129,6 +130,7 @@ export default function App() {
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
+  const compareFileRef = React.useRef<HTMLInputElement>(null);
   const camApiRef = React.useRef<CameraApi | null>(null);
   const pendingView = React.useRef<View | null>(null);
   const pendingSel = React.useRef<number[] | null>(null);
@@ -685,19 +687,58 @@ export default function App() {
     } finally { setBusy(false); }
   }
 
-  // Multi-run compare: load a second run (snapshot) as a static overlay.
+  // Multi-run compare: overlay any number of loaded runs / PLY files, each with
+  // its own x-offset, visibility, and remove. "편집" swaps one in as the main
+  // (editable) buffer so the existing double-click / drag selection works on it.
+  function addCompare(name: string, b: Uint32Array) {
+    setCompares((cs) => {
+      const step = bounds ? radius(bounds) * 2.2 : 3;
+      return [...cs, { id: compareIdRef.current++, name, buffer: b, visible: true, offset: (cs.length + 1) * step }];
+    });
+  }
   async function loadCompare() {
     if (!run2) return;
     setBusy2(true); setStatus(`compare: fetching ${run2}…`);
     try {
       const b = npzToPacked(await unzipNpz(await getSnapshot(host, run2)));
-      setBuffer2(b);
+      addCompare(run2, b);
       setStatus(`compare: ${run2} — ${b.length / 8} gaussians`);
     } catch (e) {
       setStatus("compare error: " + (e as Error).message);
     } finally { setBusy2(false); }
   }
-  function clearCompare() { setBuffer2(null); }
+  async function onCompareFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy2(true); setStatus(`compare: reading ${file.name}…`);
+    try {
+      const { buffer: b } = parsePly(await file.arrayBuffer());
+      addCompare(file.name, b);
+      setStatus(`compare: ${file.name} — ${b.length / 8} gaussians`);
+    } catch (err) {
+      setStatus("compare error: " + (err as Error).message);
+    } finally { setBusy2(false); }
+  }
+  function toggleCompare(id: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, visible: !c.visible } : c)); }
+  function setCompareOff(id: number, off: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, offset: off } : c)); }
+  function removeCompare(id: number) { setCompares((cs) => cs.filter((c) => c.id !== id)); }
+  function clearCompare() { setCompares([]); }
+  // Make a compare overlay the active/editable main buffer; the old main gets
+  // pushed back into the compare list so nothing is lost.
+  function switchToMain(item: CompareItem) {
+    if (!buffer) return;
+    const step = bounds ? radius(bounds) * 2.2 : 3;
+    const oldMain: CompareItem = { id: compareIdRef.current++, name: runId || "이전 run", buffer, visible: true, offset: step };
+    setCompares((cs) => [oldMain, ...cs.filter((c) => c.id !== item.id)]);
+    setRunId(item.name);
+    setBuffer(item.buffer); setBounds(computeBounds(item.buffer));
+    originalBuffer.current = item.buffer.slice();
+    setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
+    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
+    setSplatKey((k) => k + 1); // remount so the new run inits + sorts without needing a camera move
+    setStatus(`편집 대상 → ${item.name} (${item.buffer.length / 8} gaussians)`);
+  }
 
   // Timeline auto-play: advance the scrub frame, looping within the [in,out] clip.
   React.useEffect(() => {
@@ -960,11 +1001,11 @@ export default function App() {
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
-        <Dropdown label={`도구${measureMode || showFilter || showGroups || showCompare || buffer2 ? " ●" : ""}`} className="menu-only">
+        <Dropdown label={`도구${measureMode || showFilter || showGroups || showCompare || compares.length ? " ●" : ""}`} className="menu-only">
           <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
-          <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{buffer2 ? " ●" : ""}</button>
+          <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{compares.length ? ` (${compares.length})` : ""}</button>
         </Dropdown>
         <button className={"menu-only" + (showCamPanel || autoOrbit || camRecording || camReplaying ? " active" : "")} onClick={() => setShowCamPanel((v) => !v)} disabled={!buffer}>카메라{autoOrbit || camRecording ? " ●" : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
@@ -1031,18 +1072,32 @@ export default function App() {
 
       {showCompare && (
         <FloatingPanel title="⚖ 다중 run 비교" onClose={() => setShowCompare(false)} style={{ top: 62, right: 8 }} width="min(250px, calc(100vw - 20px))">
-          <span className="muted" style={{ fontSize: 12 }}>두 번째 run을 스냅샷으로 겹쳐 표시</span>
+          <span className="muted" style={{ fontSize: 12 }}>두 번째 대상을 겹쳐 표시 (서버 run 또는 PLY 파일)</span>
           <select value={run2} onChange={(e) => setRun2(e.target.value)}>
-            <option value="">(run 선택)</option>
+            <option value="">(서버 run 선택)</option>
             {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
           </select>
-          <button onClick={loadCompare} disabled={busy2 || !run2}>{busy2 ? "…" : "겹쳐 로드"}</button>
-          {buffer2 && (
+          <div className="row" style={{ gap: 6 }}>
+            <button className="grow" onClick={loadCompare} disabled={busy2 || !run2}>{busy2 ? "…" : "run 겹쳐 로드"}</button>
+            <button className="grow" onClick={() => compareFileRef.current?.click()} disabled={busy2}>PLY로 비교</button>
+          </div>
+          <input ref={compareFileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onCompareFile} />
+          {compares.length > 0 && (
             <>
-              <label className="row muted">가로 오프셋
-                <input type="range" className="grow" min={0} max={bounds ? radius(bounds) * 4 : 10} step={bounds ? radius(bounds) / 100 : 0.1} value={compareOffset} onChange={(e) => setCompareOffset(parseFloat(e.target.value))} />
-              </label>
-              <button className="danger" onClick={clearCompare}>비교 지우기</button>
+              <hr className="divider" />
+              <span className="muted" style={{ fontSize: 12 }}>겹친 run · "편집"으로 편집 대상 전환</span>
+              {compares.map((c) => (
+                <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div className="row" style={{ gap: 5 }}>
+                    <button className="ghost icon" onClick={() => toggleCompare(c.id)} title={c.visible ? "숨기기" : "보이기"}>{c.visible ? "👁" : "🚫"}</button>
+                    <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", opacity: c.visible ? 1 : 0.5, fontSize: 12 }} title={c.name}>{c.name}</span>
+                    <button onClick={() => switchToMain(c)} title="이 run을 편집 대상(메인)으로">편집</button>
+                    <button className="ghost icon" onClick={() => removeCompare(c.id)} title="제거">✕</button>
+                  </div>
+                  <input type="range" title="가로 오프셋" min={0} max={bounds ? radius(bounds) * 6 : 20} step={bounds ? radius(bounds) / 100 : 0.1} value={c.offset} onChange={(e) => setCompareOff(c.id, parseFloat(e.target.value))} style={{ width: "100%" }} />
+                </div>
+              ))}
+              <button className="danger" onClick={clearCompare}>비교 모두 지우기</button>
             </>
           )}
         </FloatingPanel>
@@ -1203,11 +1258,11 @@ export default function App() {
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
                 {showMap && <SplatObject buffer={lod ?? display} />}
-                {buffer2 && (
-                  <group position={[compareOffset, 0, 0]}>
-                    <SplatObject buffer={buffer2} />
+                {compares.map((c) => c.visible && (
+                  <group key={c.id} position={[c.offset, 0, 0]}>
+                    <SplatObject buffer={c.buffer} />
                   </group>
-                )}
+                ))}
               </SplatRenderContext>
             </>
           )}
