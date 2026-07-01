@@ -54,5 +54,26 @@
 
 ---
 
-추천 우선순위: **그룹 → 삭제/색변경 → 내보내기(.ply) → 타임라인 스크럽 → 측정**.
-특히 **내보내기**가 들어가면 "브라우저에서 편집 → 저장"으로 진짜 도구가 됨.
+## 📋 정식 요구사항(검수 도구 v1) 대비 갭
+현재 구현(브라우저-직접 뷰어)은 **3D 맵 렌더·다운샘플(LOD)·편집·오프라인 리뷰·타임라인·delta 라이브 폴링·성능모드·다중 run**을 충족.
+아래는 **미구현/부분**. 다수는 **Viewer Server가 해당 데이터를 API로 제공**해야 UI를 붙일 수 있음(현재 서버 API는 runs/summary/snapshot/delta manifest·added 뿐).
+
+### ❌ 미구현 — 서버 API 필요
+- **Trajectory 표시** — 카메라/기기 이동 경로 3D 라인. (서버 trajectory API)
+- **Camera pose / frustum 표시** — 현재·마지막 pose 위치+방향+시야 frustum. (서버 pose API)
+- **Reference point cloud 레이어.**
+- **Live 상태 지표** — 마지막 수신시각, image/pose/cloud/processing FPS, sync error·max delta, raw/valid/non-empty cloud count, 새 Gaussian count, GPU/메모리, warning 수. (서버 live-status API)
+- **Frame별 timestamp / sync 상태 표시.** (서버 frame-stats API)
+- **Run summary 상세 + artifact 목록** — .ply/checkpoint/CSV/NPZ 목록·확인. (서버 API)
+- **warning / error 상태 피드.** (서버 API)
+- **per-gaussian source_frame_index / source_cloud_stamp_ns 활용.** (데이터 contract)
+
+### ❌ 미구현 — 프론트만으로 가능
+- **레이어 on/off 패널** — Gaussian / Trajectory / Camera pose / Point cloud / Grid·Axes 통합 토글 (현재 grid·axes만 분산).
+- **구조화된 Error / Empty state** — run 없음 · gaussian 없음 · 필수 field 누락 · 서버 연결 끊김 · 미지원 schema · trajectory 없음 등 명확한 안내 화면 (현재는 상단 status 문자열만).
+- **상태 오버레이 확장** — 연결 상태 · 현재 timestamp · trajectory point count 등 (현재 통계 패널은 gaussian 수·bounds·선택·메모리).
+- **Timestamp 기준 replay** (현재는 frame index 스크럽).
+- **.npz 내보내기** (현재 .ply만) · **거리 기반 LOD** · **GPU picking(#19)**.
+
+### 참고
+요구사항은 **viser(Python) 기반**을 기본 검토로 명시. 현재는 viser 렌더러를 포팅한 **브라우저-직접** 방식이라 3D 맵/편집은 충족하나, trajectory·pose·live status는 **서버 API + UI 추가**가 필요. (viser로 갈지, 이 브라우저 뷰어 + 별도 서버 API로 갈지는 9절 미팅 결정사항.)
