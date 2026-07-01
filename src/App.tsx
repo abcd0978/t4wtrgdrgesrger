@@ -57,6 +57,9 @@ export default function App() {
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
   const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
   const [showTimeline, setShowTimeline] = React.useState(true);
+  const [live, setLive] = React.useState(false); // poll server for new delta frames
+  const liveCtxRef = React.useRef<{ host: string; run: string } | null>(null);
+  const pollingRef = React.useRef(false);
   const [showGroups, setShowGroups] = React.useState(false);
   const [groups, setGroups] = React.useState<Group[]>([]);
   const groupIdRef = React.useRef(1);
@@ -136,6 +139,7 @@ export default function App() {
     setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
     setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
+    setLive(false); liveCtxRef.current = null;
     try {
       let final: Uint32Array | null = null;
       if (_mode === "snapshot") {
@@ -165,6 +169,7 @@ export default function App() {
         const cum = manifest.frames.slice(0, limit).map((f) => f.cumulative_gaussian_count);
         setFrameCum(cum); setFrameIdx(cum.length - 1);
         setClipIn(0); setClipOut(cum.length - 1);
+        liveCtxRef.current = { host: _host, run: _run }; // enable live polling for this run
         final = capacity;
       }
       if (final) originalBuffer.current = final.slice();
@@ -187,6 +192,42 @@ export default function App() {
     if (u.sel) pendingSel.current = u.sel;
     if (u.run) load({ host: u.host, runId: u.run, mode: u.mode, maxFrames: u.maxFrames });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live polling: fetch the manifest and append any new delta frames to the buffer.
+  async function pollLive() {
+    const ctx = liveCtxRef.current;
+    if (!ctx || pollingRef.current || !buffer || !frameCum) return;
+    pollingRef.current = true;
+    try {
+      const manifest = await getDeltaManifest(ctx.host, ctx.run);
+      const have = frameCum.length;
+      const newLimit = manifest.frames.length;
+      if (newLimit <= have) return;
+      const parts: Uint32Array[] = [];
+      for (let i = have; i < newLimit; i++) {
+        parts.push(npzToPacked(await unzipNpz(await getAddedNpz(ctx.host, ctx.run, manifest.frames[i].frame_index))));
+      }
+      const addLen = parts.reduce((a, p) => a + p.length, 0);
+      const nb = new Uint32Array(buffer.length + addLen);
+      nb.set(buffer);
+      let off = buffer.length;
+      for (const p of parts) { nb.set(p, off); off += p.length; }
+      const cum = manifest.frames.slice(0, newLimit).map((f) => f.cumulative_gaussian_count);
+      setBuffer(nb); setBounds(computeBounds(nb)); setFrameCum(cum);
+      setFrameIdx((fi) => (fi >= have - 1 ? cum.length - 1 : fi)); // follow if at the latest frame
+      setClipOut((co) => (co >= have - 1 ? cum.length - 1 : co));
+      setStatus(`live +${newLimit - have} frames → ${nb.length / 8} gaussians`);
+    } catch (e) {
+      setStatus("live poll error: " + (e as Error).message);
+    } finally { pollingRef.current = false; }
+  }
+  const pollRef = React.useRef<() => void>(() => {});
+  pollRef.current = pollLive;
+  React.useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => pollRef.current(), 3000);
+    return () => clearInterval(id);
+  }, [live]);
 
   // The rendered buffer: timeline truncation + hide/isolate (alpha 0) + selection
   // highlight, all overlaid on a copy so edits stay on the real `buffer`. Same
@@ -777,6 +818,7 @@ export default function App() {
         <button className={"menu-only" + (showFilter ? " active" : "")} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
         <button className={"menu-only" + (showGroups ? " active" : "")} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
+        {hasTimeline && <button className={live ? "active" : ""} onClick={() => setLive((v) => !v)} title="새 delta 프레임 자동 폴링">{live ? "● 라이브" : "라이브"}</button>}
         <button className="menu-only" onClick={exportPly} disabled={!buffer}>내보내기</button>
         <button className="menu-only" onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
         <button className="menu-only" onClick={share} disabled={!buffer}>공유</button>
