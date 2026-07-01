@@ -438,6 +438,16 @@ export default function App() {
     setStatus("exported .ply");
   }
 
+  // Export only the selected gaussians as a .ply.
+  function exportSelectionPly() {
+    if (!buffer || selection.size === 0) return;
+    const sel = [...selection];
+    const out = new Uint32Array(sel.length * 8);
+    for (let j = 0; j < sel.length; j++) out.set(buffer.subarray(sel[j] * 8, sel[j] * 8 + 8), j * 8);
+    downloadBlob(packedToPly(out), `${runId || "gaussians"}_sel.ply`);
+    setStatus(`exported ${sel.length} selected (.ply)`);
+  }
+
   // Load a local .ply file into the viewer (no server needed). Clears the view
   // before the await so the camera refits to the new file; restores the timeline
   // when the file carries frame info.
@@ -724,6 +734,7 @@ export default function App() {
               <button className="grow" onClick={isolateSelection}>격리</button>
               <button className="grow danger" onClick={deleteSelection}>삭제</button>
             </div>
+            <button onClick={exportSelectionPly}>선택만 .ply 내보내기</button>
           </div>
         </div>
       )}
