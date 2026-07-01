@@ -350,19 +350,21 @@ export default function App() {
     setStatus(`scene rotated ${deg}° (${axis === 0 ? "X" : axis === 1 ? "Y" : "Z"})`);
   }
 
-  function scaleSelection(f: number) {
+  // Scale the selection about its centroid, per axis (position + covariance).
+  function scaleSelectionXYZ(sx: number, sy: number, sz: number) {
     if (!buffer || selection.size === 0) return;
     const c = selCenter(buffer, selection);
     const cov = [0, 0, 0, 0, 0, 0];
     commitEdit((dv, b) => {
-      dv.setFloat32(b, c[0] + (dv.getFloat32(b, true) - c[0]) * f, true);
-      dv.setFloat32(b + 4, c[1] + (dv.getFloat32(b + 4, true) - c[1]) * f, true);
-      dv.setFloat32(b + 8, c[2] + (dv.getFloat32(b + 8, true) - c[2]) * f, true);
+      dv.setFloat32(b, c[0] + (dv.getFloat32(b, true) - c[0]) * sx, true);
+      dv.setFloat32(b + 4, c[1] + (dv.getFloat32(b + 4, true) - c[1]) * sy, true);
+      dv.setFloat32(b + 8, c[2] + (dv.getFloat32(b + 8, true) - c[2]) * sz, true);
       for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
-      const sc = scaleCovariance(cov, f, f, f);
+      const sc = scaleCovariance(cov, sx, sy, sz);
       for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(sc[k]), true);
     }, `scaled ${selection.size} gaussians`);
   }
+  function scaleSelection(f: number) { scaleSelectionXYZ(f, f, f); }
 
   // Copy the selection (offset along X) into appended slots; select the copies.
   function duplicateSelection() {
@@ -712,9 +714,17 @@ export default function App() {
             ))}
             <div className="seg">
               <span className="axis">⤢</span>
-              <button onClick={() => scaleSelection(1 / 1.1)}>− 작게</button>
-              <button onClick={() => scaleSelection(1.1)}>＋ 크게</button>
+              <button onClick={() => scaleSelection(1 / 1.1)}>− 균등</button>
+              <button onClick={() => scaleSelection(1.1)}>＋ 균등</button>
             </div>
+            <div className="muted" style={{ fontSize: 12 }}>축별 스케일</div>
+            {(["X", "Y", "Z"] as const).map((ax, i) => (
+              <div key={"s" + ax} className="seg">
+                <span className="axis">{ax}</span>
+                <button onClick={() => scaleSelectionXYZ(i === 0 ? 1 / 1.1 : 1, i === 1 ? 1 / 1.1 : 1, i === 2 ? 1 / 1.1 : 1)}>−</button>
+                <button onClick={() => scaleSelectionXYZ(i === 0 ? 1.1 : 1, i === 1 ? 1.1 : 1, i === 2 ? 1.1 : 1)}>＋</button>
+              </div>
+            ))}
 
             <hr className="divider" />
             <label className="row muted">색
