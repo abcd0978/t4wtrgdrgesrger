@@ -280,20 +280,51 @@ export function CanvasCapture({
 
 export type CamPose = { p: [number, number, number]; t: [number, number, number]; ms: number };
 
+/** Interpolated camera pose at time `ms` along a recorded path. */
+function poseAt(path: CamPose[], ms: number): CamPose | null {
+  if (path.length === 0) return null;
+  if (ms <= path[0].ms) return path[0];
+  const last = path[path.length - 1];
+  if (ms >= last.ms) return last;
+  let i = 1;
+  while (i < path.length && path[i].ms < ms) i++;
+  const a = path[i - 1], b = path[i];
+  const u = (ms - a.ms) / ((b.ms - a.ms) || 1);
+  const lp = (k: number) => a.p[k] + (b.p[k] - a.p[k]) * u;
+  const lt = (k: number) => a.t[k] + (b.t[k] - a.t[k]) * u;
+  return { p: [lp(0), lp(1), lp(2)], t: [lt(0), lt(1), lt(2)], ms };
+}
+
 /** Record the camera pose (pos + orbit target) over time into recRef while
- * `recording`, and replay it (interpolated) while `playing`. Time is accumulated
- * from frame deltas so it's independent of framerate. */
-export function CameraPath({ recording, playing, recRef, path, onPlayEnd }: {
+ * `recording`; replay it while `playing` (reporting progress via onProgress);
+ * or jump to `seekMs` (timeline scrub) when not playing. Framerate-independent. */
+export function CameraPath({ recording, playing, recRef, path, seekMs, onProgress, onPlayEnd }: {
   recording: boolean;
   playing: boolean;
   recRef: React.MutableRefObject<CamPose[]>;
   path: CamPose[];
+  seekMs: number | null;
+  onProgress: (ms: number) => void;
   onPlayEnd: () => void;
 }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
   const recT = React.useRef(0), lastSample = React.useRef(-1), prevRec = React.useRef(false);
-  const playT = React.useRef(0), prevPlay = React.useRef(false);
+  const playT = React.useRef(0), prevPlay = React.useRef(false), lastReport = React.useRef(0);
+
+  const apply = (pose: CamPose | null) => {
+    if (!pose || !controls) return;
+    camera.position.set(pose.p[0], pose.p[1], pose.p[2]);
+    controls.target.set(pose.t[0], pose.t[1], pose.t[2]);
+    controls.update();
+  };
+
+  // Scrub: apply the seek pose when it changes (and we're not playing).
+  React.useEffect(() => {
+    if (!playing && seekMs != null) apply(poseAt(path, seekMs));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekMs, playing]);
+
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
     if (recording) {
@@ -311,19 +342,14 @@ export function CameraPath({ recording, playing, recRef, path, onPlayEnd }: {
     }
     prevRec.current = recording;
 
-    if (playing && path.length >= 2 && controls) {
-      if (!prevPlay.current) playT.current = 0;
+    if (playing && path.length >= 2) {
+      if (!prevPlay.current) { playT.current = seekMs ?? 0; lastReport.current = -1; }
       playT.current += dt;
       const end = path[path.length - 1].ms;
-      if (playT.current >= end) { onPlayEnd(); }
+      if (playT.current >= end) { onProgress(end); onPlayEnd(); }
       else {
-        let i = 1;
-        while (i < path.length && path[i].ms < playT.current) i++;
-        const a = path[i - 1], b = path[i];
-        const u = Math.min(1, Math.max(0, (playT.current - a.ms) / ((b.ms - a.ms) || 1)));
-        camera.position.set(a.p[0] + (b.p[0] - a.p[0]) * u, a.p[1] + (b.p[1] - a.p[1]) * u, a.p[2] + (b.p[2] - a.p[2]) * u);
-        controls.target.set(a.t[0] + (b.t[0] - a.t[0]) * u, a.t[1] + (b.t[1] - a.t[1]) * u, a.t[2] + (b.t[2] - a.t[2]) * u);
-        controls.update();
+        apply(poseAt(path, playT.current));
+        if (playT.current - lastReport.current > 0.07) { lastReport.current = playT.current; onProgress(playT.current); }
       }
     }
     prevPlay.current = playing;

@@ -2,6 +2,7 @@ import React from "react";
 import { type RenderSettings, DEFAULT_SETTINGS } from "../RenderSettings";
 import { type GridOpts } from "./SceneObjects";
 import { type Bounds } from "../lib/bounds";
+import { useDragOffset } from "./FloatingPanel";
 
 function NumSlider({
   label, k, min, max, step, settings, setSettings,
@@ -48,19 +49,21 @@ export function SettingsPanel({
   const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds } = scene;
   const disabledLayer = { display: "flex", gap: 6, alignItems: "center", opacity: 0.45 } as const;
   const ca = settings.clipAxis;
+  const { off, startDrag } = useDragOffset();
   return (
     <div className="scroll" style={{
       position: "absolute", zIndex: 3, top: 46, right: 8, width: "min(280px, calc(100vw - 16px))",
       display: "flex", flexDirection: "column", gap: 6, padding: 10,
       background: "rgba(0,0,0,0.78)", color: "#fff", font: "14px monospace", borderRadius: 6,
-      maxHeight: "calc(100dvh - 62px)", overflowY: "auto",
+      maxHeight: "calc(100dvh - 62px)", overflowY: "auto", transform: `translate(${off.x}px, ${off.y}px)`,
     }}>
-      <div style={{
+      <div onPointerDown={startDrag} style={{
         position: "sticky", top: -10, zIndex: 1, margin: "-10px -10px 2px", padding: "8px 10px",
         background: "rgba(0,0,0,0.92)", display: "flex", justifyContent: "space-between", alignItems: "center",
+        cursor: "move", userSelect: "none", touchAction: "none",
       }}>
-        <b>고급 설정</b>
-        <button className="ghost icon" onClick={onClose} title="닫기">✕</button>
+        <b style={{ pointerEvents: "none" }}>고급 설정</b>
+        <button className="ghost icon" onClick={onClose} onPointerDown={(e) => e.stopPropagation()} title="닫기">✕</button>
       </div>
       <b>shader</b>
       <NumSlider label="splat size" k="splatScale" min={0.1} max={5} step={0.1} settings={settings} setSettings={setSettings} />

@@ -1,4 +1,4 @@
-import React from "react";
+import { FloatingPanel } from "./FloatingPanel";
 
 type Axis = 0 | 1 | 2;
 type GroupItem = { id: number; name: string; indices: number[]; hidden: boolean; color: string };
@@ -21,12 +21,7 @@ export function SelectionPanel({
   onDuplicate: () => void; onHide: () => void; onIsolate: () => void; onDelete: () => void; onExportSel: () => void;
 }) {
   return (
-    <div className="panel scroll" style={{ top: 62, left: 10, width: "min(214px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-      <div className="panel-section">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="panel-title">선택 {selectionSize.toLocaleString()}개</span>
-          <button className="ghost icon" onClick={onDeselect} title="선택 해제">✕</button>
-        </div>
+    <FloatingPanel title={`선택 ${selectionSize.toLocaleString()}개`} onClose={onDeselect} style={{ top: 62, left: 10 }} width="min(214px, calc(100vw - 20px))">
         <div className="row">
           <button className="grow" onClick={onInvert}>선택 반전</button>
           <button className="grow" onClick={onGrow} title="선택 영역(박스)을 채워 확장">확장</button>
@@ -90,8 +85,7 @@ export function SelectionPanel({
           <button className="grow danger" onClick={onDelete}>삭제</button>
         </div>
         <button onClick={onExportSel}>선택만 .ply 내보내기</button>
-      </div>
-    </div>
+    </FloatingPanel>
   );
 }
 
@@ -108,12 +102,7 @@ export function FilterPanel({
   filterOpMin: number; setFilterOpMin: (v: number) => void; filterOpMax: number; setFilterOpMax: (v: number) => void; onFilterOpacity: () => void;
 }) {
   return (
-    <div className="panel scroll" style={{ top: 62, right: 8, width: "min(230px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-      <div className="panel-section">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="panel-title">🔎 필터 선택</span>
-          <button className="ghost icon" onClick={onClose}>✕</button>
-        </div>
+    <FloatingPanel title="🔎 필터 선택" onClose={onClose} style={{ top: 62, right: 8 }} width="min(230px, calc(100vw - 20px))">
         <label className="row"><input type="checkbox" checked={filterAdd} onChange={(e) => setFilterAdd(e.target.checked)} /> 기존 선택에 추가</label>
 
         <hr className="divider" />
@@ -137,8 +126,7 @@ export function FilterPanel({
           <input type="number" className="num grow" min={0} max={255} value={filterOpMax} onChange={(e) => setFilterOpMax(Math.max(0, parseInt(e.target.value) || 0))} />
         </div>
         <button onClick={onFilterOpacity}>불투명도로 선택</button>
-      </div>
-    </div>
+    </FloatingPanel>
   );
 }
 
@@ -151,12 +139,7 @@ export function GroupPanel({
   onRecolor: (id: number, color: string) => void; onRemove: (id: number) => void;
 }) {
   return (
-    <div className="panel scroll" style={{ top: 62, right: 8, width: "min(240px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-      <div className="panel-section">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="panel-title">🗂 그룹</span>
-          <button className="ghost icon" onClick={onClose}>✕</button>
-        </div>
+    <FloatingPanel title="🗂 그룹" onClose={onClose} style={{ top: 62, right: 8 }} width="min(240px, calc(100vw - 20px))">
         <button onClick={onCreate} disabled={selectionSize === 0}>선택을 그룹으로 ({selectionSize.toLocaleString()})</button>
         {groups.length === 0 && <span className="muted" style={{ fontSize: 12 }}>그룹 없음. 선택 후 위 버튼으로 저장.</span>}
         {groups.map((g) => (
@@ -167,7 +150,6 @@ export function GroupPanel({
             <button className="ghost icon" onClick={() => onRemove(g.id)} title="그룹 해제(가우시안 유지)">✕</button>
           </div>
         ))}
-      </div>
-    </div>
+    </FloatingPanel>
   );
 }

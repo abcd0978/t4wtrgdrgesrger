@@ -15,6 +15,7 @@ import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussi
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
 import { Dropdown } from "./components/Dropdown";
+import { FloatingPanel } from "./components/FloatingPanel";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
@@ -112,9 +113,12 @@ export default function App() {
   const [measurePts, setMeasurePts] = React.useState<[number, number, number][]>([]);
   const [camDone, setCamDone] = React.useState(false); // first fit / URL view applied
   const [autoOrbit, setAutoOrbit] = React.useState(false);
+  const [autoOrbitSpeed, setAutoOrbitSpeed] = React.useState(0.5);
+  const [showCamPanel, setShowCamPanel] = React.useState(false);
   const [camRecording, setCamRecording] = React.useState(false);
   const [camReplaying, setCamReplaying] = React.useState(false);
   const [camPath, setCamPath] = React.useState<CamPose[]>([]);
+  const [camSeekMs, setCamSeekMs] = React.useState(0);
   const camRecRef = React.useRef<CamPose[]>([]);
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
@@ -882,12 +886,7 @@ export default function App() {
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{buffer2 ? " ●" : ""}</button>
         </Dropdown>
-        <Dropdown label={`카메라${autoOrbit || camRecording || camReplaying ? " ●" : ""}`} className="menu-only">
-          <button className={autoOrbit ? "active" : ""} onClick={() => setAutoOrbit((v) => !v)}>자동 회전 (공전)</button>
-          <button className={camRecording ? "active danger" : ""} onClick={toggleCamRecord} disabled={!buffer}>{camRecording ? "■ 녹화 정지" : "● 카메라 경로 녹화"}</button>
-          <button onClick={playCamPath} disabled={camPath.length < 2 || camReplaying}>{camReplaying ? "재생 중…" : `▶ 경로 재생${camPath.length ? ` (${camPath.length}f)` : ""}`}</button>
-          {camReplaying && <button onClick={() => setCamReplaying(false)}>■ 재생 정지</button>}
-        </Dropdown>
+        <button className={"menu-only" + (showCamPanel || autoOrbit || camRecording || camReplaying ? " active" : "")} onClick={() => setShowCamPanel((v) => !v)} disabled={!buffer}>카메라{autoOrbit || camRecording ? " ●" : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         {hasTimeline && <button className={live ? "active" : ""} onClick={() => setLive((v) => !v)} title="새 delta 프레임 자동 폴링">{live ? "● 라이브" : "라이브"}</button>}
         <button className="menu-only" onClick={() => setShowStats((v) => !v)}>통계</button>
@@ -906,19 +905,13 @@ export default function App() {
       )}
 
       {showHelp && (
-        <div className="panel" style={{ left: 10, bottom: timelineVisible ? 112 : 10, width: "min(420px, calc(100vw - 20px))", maxHeight: `calc(100dvh - ${(timelineVisible ? 112 : 10) + 16}px)` }}>
-          <div className="panel-section">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="panel-title">📖 사용 방법</span>
-              <button className="ghost icon" onClick={() => setShowHelp(false)}>✕</button>
+        <FloatingPanel title="📖 사용 방법" onClose={() => setShowHelp(false)} style={{ left: 10, bottom: timelineVisible ? 112 : 10 }} width="min(420px, calc(100vw - 20px))">
+          {HELP.map(([k, v]) => (
+            <div key={k} className="row" style={{ alignItems: "baseline" }}>
+              <span className="kbd">{k}</span><span className="muted">{v}</span>
             </div>
-            {HELP.map(([k, v]) => (
-              <div key={k} className="row" style={{ alignItems: "baseline" }}>
-                <span className="kbd">{k}</span><span className="muted">{v}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+          ))}
+        </FloatingPanel>
       )}
 
       {selection.size > 0 && !measureMode && (
@@ -934,16 +927,10 @@ export default function App() {
       )}
 
       {measureMode && (
-        <div className="panel" style={{ top: 64, left: "50%", transform: "translateX(-50%)", maxWidth: "min(360px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 80px)" }}>
-          <div className="panel-section" style={{ gap: 6 }}>
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="panel-title">📏 측정</span>
-              <button className="ghost icon" onClick={() => { setMeasureMode(false); setMeasurePts([]); }}>✕</button>
-            </div>
-            <span className="muted">가우시안 두 점을 더블클릭 ({measurePts.length}/2)</span>
-            {measureDist != null && <span className="num" style={{ fontSize: 17, color: "var(--accent-2)" }}>거리: {measureDist.toFixed(3)}</span>}
-          </div>
-        </div>
+        <FloatingPanel title="📏 측정" onClose={() => { setMeasureMode(false); setMeasurePts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(360px, calc(100vw - 20px))">
+          <span className="muted">가우시안 두 점을 더블클릭 ({measurePts.length}/2)</span>
+          {measureDist != null && <span className="num" style={{ fontSize: 17, color: "var(--accent-2)" }}>거리: {measureDist.toFixed(3)}</span>}
+        </FloatingPanel>
       )}
 
       {showFilter && (
@@ -963,29 +950,49 @@ export default function App() {
       )}
 
       {showCompare && (
-        <div className="panel scroll" style={{ top: 62, right: 8, width: "min(250px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
-          <div className="panel-section">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="panel-title">⚖ 다중 run 비교</span>
-              <button className="ghost icon" onClick={() => setShowCompare(false)}>✕</button>
-            </div>
-            <span className="muted" style={{ fontSize: 12 }}>두 번째 run을 스냅샷으로 겹쳐 표시</span>
-            <select value={run2} onChange={(e) => setRun2(e.target.value)}>
-              <option value="">(run 선택)</option>
-              {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
-            </select>
-            <button onClick={loadCompare} disabled={busy2 || !run2}>{busy2 ? "…" : "겹쳐 로드"}</button>
-            {buffer2 && (
+        <FloatingPanel title="⚖ 다중 run 비교" onClose={() => setShowCompare(false)} style={{ top: 62, right: 8 }} width="min(250px, calc(100vw - 20px))">
+          <span className="muted" style={{ fontSize: 12 }}>두 번째 run을 스냅샷으로 겹쳐 표시</span>
+          <select value={run2} onChange={(e) => setRun2(e.target.value)}>
+            <option value="">(run 선택)</option>
+            {runs.map((r) => <option key={r.runId} value={r.runId}>{r.runId} ({r.gaussians})</option>)}
+          </select>
+          <button onClick={loadCompare} disabled={busy2 || !run2}>{busy2 ? "…" : "겹쳐 로드"}</button>
+          {buffer2 && (
+            <>
+              <label className="row muted">가로 오프셋
+                <input type="range" className="grow" min={0} max={bounds ? radius(bounds) * 4 : 10} step={bounds ? radius(bounds) / 100 : 0.1} value={compareOffset} onChange={(e) => setCompareOffset(parseFloat(e.target.value))} />
+              </label>
+              <button className="danger" onClick={clearCompare}>비교 지우기</button>
+            </>
+          )}
+        </FloatingPanel>
+      )}
+
+      {showCamPanel && (() => {
+        const dur = camPath.length ? camPath[camPath.length - 1].ms : 0;
+        return (
+          <FloatingPanel title="🎥 카메라" onClose={() => setShowCamPanel(false)} style={{ top: 62, right: 8 }} width="min(250px, calc(100vw - 20px))">
+            <label className="row"><input type="checkbox" checked={autoOrbit} onChange={(e) => setAutoOrbit(e.target.checked)} /> 자동 회전 (공전)</label>
+            <label className="row muted">속도
+              <input type="range" className="grow" min={0.05} max={2} step={0.05} value={autoOrbitSpeed} onChange={(e) => setAutoOrbitSpeed(parseFloat(e.target.value))} />
+              <span className="num" style={{ width: 34, textAlign: "right" }}>{autoOrbitSpeed.toFixed(2)}</span>
+            </label>
+            <hr className="divider" />
+            <div className="muted">카메라 경로</div>
+            <button className={camRecording ? "danger" : ""} onClick={toggleCamRecord} disabled={!buffer}>{camRecording ? `■ 녹화 정지 (${camRecRef.current.length}f)` : "● 경로 녹화"}</button>
+            {camPath.length >= 2 && (
               <>
-                <label className="row muted">가로 오프셋
-                  <input type="range" className="grow" min={0} max={bounds ? radius(bounds) * 4 : 10} step={bounds ? radius(bounds) / 100 : 0.1} value={compareOffset} onChange={(e) => setCompareOffset(parseFloat(e.target.value))} />
-                </label>
-                <button className="danger" onClick={clearCompare}>비교 지우기</button>
+                <div className="row" style={{ gap: 8 }}>
+                  <button className={camReplaying ? "active icon" : "icon"} onClick={() => (camReplaying ? setCamReplaying(false) : playCamPath())}>{camReplaying ? "⏸" : "▶"}</button>
+                  <input type="range" className="grow" min={0} max={dur} step={dur / 300 || 0.01} value={Math.min(camSeekMs, dur)} onChange={(e) => { setCamReplaying(false); setCamSeekMs(parseFloat(e.target.value)); }} />
+                  <span className="num muted" style={{ whiteSpace: "nowrap" }}>{camSeekMs.toFixed(1)}s</span>
+                </div>
+                <button className="ghost" onClick={() => { setCamReplaying(false); setCamPath([]); setCamSeekMs(0); }}>경로 지우기</button>
               </>
             )}
-          </div>
-        </div>
-      )}
+          </FloatingPanel>
+        );
+      })()}
 
       {timelineVisible && (
         <div className="panel" style={{ bottom: 10, left: 10, right: 10 }}>
@@ -1013,9 +1020,7 @@ export default function App() {
       )}
 
       {showStats && stats && (
-        <div className="panel" style={{ right: 10, bottom: timelineVisible ? 112 : 10, minWidth: 200, maxWidth: "calc(100vw - 20px)", maxHeight: `calc(100dvh - ${(timelineVisible ? 112 : 10) + 16}px)` }}>
-          <div className="panel-section" style={{ gap: 6 }}>
-            <div className="panel-title">📊 통계</div>
+        <FloatingPanel title="📊 통계" onClose={() => setShowStats(false)} style={{ right: 10, bottom: timelineVisible ? 112 : 10 }} width="min(220px, calc(100vw - 20px))">
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">가우시안</span><span className="num">{stats.live.toLocaleString()}{stats.live !== stats.slots && ` / ${stats.slots.toLocaleString()}`}</span></div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">바운드</span><span className="num">{stats.size.map((v) => v.toFixed(2)).join(" × ")}</span></div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">선택</span><span className="num">{selection.size.toLocaleString()}</span></div>
@@ -1030,6 +1035,14 @@ export default function App() {
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">서버 연결</span><span className="num" style={{ color: serverOk === false ? "var(--danger)" : serverOk ? "#33e08a" : "var(--text-dim)" }}>{serverOk === false ? "끊김" : serverOk ? "OK" : "—"}</span></div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">마지막 업데이트</span><span className="num">{lastUpdate || "—"}</span></div>
             {live && <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">라이브</span><span className="num" style={{ color: "#33e08a" }}>● 폴링 중</span></div>}
+        </FloatingPanel>
+      )}
+
+      {camRecording && (
+        <div className="panel" style={{ top: 62, left: "50%", transform: "translateX(-50%)", zIndex: 6 }}>
+          <div className="panel-section" style={{ flexDirection: "row", alignItems: "center", padding: "8px 14px", gap: 10 }}>
+            <span className="rec-dot" /><span style={{ fontWeight: 700 }}>경로 녹화중</span>
+            <button className="danger" onClick={toggleCamRecord}>■ 정지</button>
           </div>
         </div>
       )}
@@ -1057,8 +1070,8 @@ export default function App() {
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}
-        <AutoOrbit enabled={autoOrbit && !camReplaying} speed={0.5} />
-        <CameraPath recording={camRecording} playing={camReplaying} recRef={camRecRef} path={camPath} onPlayEnd={() => setCamReplaying(false)} />
+        <AutoOrbit enabled={autoOrbit && !camReplaying} speed={autoOrbitSpeed} />
+        <CameraPath recording={camRecording} playing={camReplaying} recRef={camRecRef} path={camPath} seekMs={camSeekMs} onProgress={setCamSeekMs} onPlayEnd={() => setCamReplaying(false)} />
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />

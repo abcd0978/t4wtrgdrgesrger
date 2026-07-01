@@ -21,6 +21,15 @@ export function Dropdown({ label, className, children }: {
     setOpen((o) => !o);
   };
 
+  // once the menu has rendered we know its width; nudge it left so it never
+  // spills off the right edge (common on phones when the button is near the edge).
+  React.useLayoutEffect(() => {
+    if (!open || !pos || !menuRef.current) return;
+    const w = menuRef.current.offsetWidth;
+    const clamped = Math.max(8, Math.min(pos.left, window.innerWidth - w - 8));
+    if (clamped !== pos.left) setPos({ left: clamped, top: pos.top });
+  }, [open, pos]);
+
   React.useEffect(() => {
     if (!open) return;
     const onDoc = (e: PointerEvent) => {
