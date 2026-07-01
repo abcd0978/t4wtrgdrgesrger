@@ -1,5 +1,11 @@
 # 변경 내역 (Changelog)
 
+## 리팩토링 1 + Load 속도 개선
+
+- **Load 느려짐 수정** — 통계(가우시안 수) 계산이 패널이 닫혀 있어도 매 버퍼 갱신마다 전체 버퍼를 스캔하던 것을, **통계 패널이 열렸을 때만** 계산하도록 게이트. delta 스트리밍 중 전체 스캔 ~20회 제거.
+- **중복 제거** — `src/lib/gaussianEdit.ts`(hexToRgb·viewOf·readCov6/writeCov6·avgColorHex)로 색 파싱·공분산 f16 read/write·평균색 중복 통합.
+- **훅 분리** — 키보드 단축키를 `src/hooks/useKeyboardShortcuts.ts`로.
+
 ## 실시간 폴링 (#15)
 
 - delta 로드 시 상단 `라이브` 토글 — 3초마다 manifest를 폴링해 새 프레임을 버퍼에 append(라이브 스캔 반영). 마지막 프레임을 보고 있으면 최신으로 자동 따라감.

@@ -1,7 +1,6 @@
 import React from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
-import { DataUtils } from "three";
 import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
@@ -11,6 +10,8 @@ import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./Rende
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
+import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
@@ -338,9 +339,7 @@ export default function App() {
       wdv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
       wdv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
       wdv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
-      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(odv.getUint16(b + 16 + k * 2, true));
-      const rc = rotateCovariance(cov, R);
-      for (let k = 0; k < 6; k++) wdv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
+      readCov6(odv, b, cov); writeCov6(wdv, b, rotateCovariance(cov, R));
     }, `rotating ${selection.size}…`);
   }
 
@@ -353,9 +352,7 @@ export default function App() {
   }
 
   function applyColorOpacity() {
-    const r = parseInt(editColor.slice(1, 3), 16);
-    const g = parseInt(editColor.slice(3, 5), 16);
-    const bl = parseInt(editColor.slice(5, 7), 16);
+    const [r, g, bl] = hexToRgb(editColor);
     const a = Math.round(editAlpha * 255);
     commitEdit((dv, b) => {
       dv.setUint8(b + 28, r); dv.setUint8(b + 29, g); dv.setUint8(b + 30, bl); dv.setUint8(b + 31, a);
@@ -374,9 +371,7 @@ export default function App() {
       dv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
       dv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
       dv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
-      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
-      const rc = rotateCovariance(cov, R);
-      for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
+      readCov6(dv, b, cov); writeCov6(dv, b, rotateCovariance(cov, R));
     }, `rotated ${selection.size} gaussians`);
   }
   function rotateSelection(axis: 0 | 1 | 2, deg: number) {
@@ -401,9 +396,7 @@ export default function App() {
       dv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
       dv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
       dv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
-      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
-      const rc = rotateCovariance(cov, R);
-      for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(rc[k]), true);
+      readCov6(dv, b, cov); writeCov6(dv, b, rotateCovariance(cov, R));
     }
     setBuffer(nb); setBounds(computeBounds(nb));
     setStatus(`scene rotated ${deg}° (${axis === 0 ? "X" : axis === 1 ? "Y" : "Z"})`);
@@ -418,9 +411,7 @@ export default function App() {
       dv.setFloat32(b, c[0] + (dv.getFloat32(b, true) - c[0]) * sx, true);
       dv.setFloat32(b + 4, c[1] + (dv.getFloat32(b + 4, true) - c[1]) * sy, true);
       dv.setFloat32(b + 8, c[2] + (dv.getFloat32(b + 8, true) - c[2]) * sz, true);
-      for (let k = 0; k < 6; k++) cov[k] = DataUtils.fromHalfFloat(dv.getUint16(b + 16 + k * 2, true));
-      const sc = scaleCovariance(cov, sx, sy, sz);
-      for (let k = 0; k < 6; k++) dv.setUint16(b + 16 + k * 2, DataUtils.toHalfFloat(sc[k]), true);
+      readCov6(dv, b, cov); writeCov6(dv, b, scaleCovariance(cov, sx, sy, sz));
     }, `scaled ${selection.size} gaussians`);
   }
   function scaleSelection(f: number) { scaleSelectionXYZ(f, f, f); }
@@ -460,7 +451,7 @@ export default function App() {
   // Invert: select every visible gaussian that isn't currently selected.
   function invertSelection() {
     if (!buffer) return;
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const dv = viewOf(buffer);
     const n = buffer.length / 8;
     const next = new Set<number>();
     for (let i = 0; i < n; i++) if (dv.getUint8(i * 32 + 31) !== 0 && !selection.has(i)) next.add(i);
@@ -472,7 +463,7 @@ export default function App() {
   // the current selection — a cheap way to fill out the region you picked.
   function growSelection() {
     if (!buffer || selection.size === 0) return;
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const dv = viewOf(buffer);
     let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
     for (const i of selection) {
       const b = i * 32, x = dv.getFloat32(b, true), y = dv.getFloat32(b + 4, true), z = dv.getFloat32(b + 8, true);
@@ -496,9 +487,9 @@ export default function App() {
   // Filter-select by colour similarity (RGB euclidean distance <= tolerance).
   function filterByColor() {
     if (!buffer) return;
-    const tr = parseInt(filterColor.slice(1, 3), 16), tg = parseInt(filterColor.slice(3, 5), 16), tb = parseInt(filterColor.slice(5, 7), 16);
+    const [tr, tg, tb] = hexToRgb(filterColor);
     const tol2 = filterTol * filterTol;
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const dv = viewOf(buffer);
     const n = buffer.length / 8;
     const next = filterAdd ? new Set(selection) : new Set<number>();
     for (let i = 0; i < n; i++) {
@@ -515,7 +506,7 @@ export default function App() {
   function filterByOpacity() {
     if (!buffer) return;
     const lo = Math.min(filterOpMin, filterOpMax), hi = Math.max(filterOpMin, filterOpMax);
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const dv = viewOf(buffer);
     const n = buffer.length / 8;
     const next = filterAdd ? new Set(selection) : new Set<number>();
     for (let i = 0; i < n; i++) {
@@ -529,28 +520,15 @@ export default function App() {
   // Set the filter colour to the average colour of the current selection.
   function pickColorFromSelection() {
     if (!buffer || selection.size === 0) return;
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    let r = 0, g = 0, bl = 0;
-    for (const i of selection) { const b = i * 32; r += dv.getUint8(b + 28); g += dv.getUint8(b + 29); bl += dv.getUint8(b + 30); }
-    const nn = selection.size;
-    const hx = (v: number) => Math.round(v / nn).toString(16).padStart(2, "0");
-    setFilterColor(`#${hx(r)}${hx(g)}${hx(bl)}`);
+    setFilterColor(avgColorHex(viewOf(buffer), selection, selection.size));
   }
 
   // --- groups: save a selection, then reselect / hide / recolor / remove it ---
-  function avgHex(indices: number[]): string {
-    if (!buffer || indices.length === 0) return "#cccccc";
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    let r = 0, g = 0, bl = 0;
-    for (const i of indices) { const b = i * 32; r += dv.getUint8(b + 28); g += dv.getUint8(b + 29); bl += dv.getUint8(b + 30); }
-    const hx = (v: number) => Math.round(v / indices.length).toString(16).padStart(2, "0");
-    return `#${hx(r)}${hx(g)}${hx(bl)}`;
-  }
   function createGroup() {
-    if (selection.size === 0) return;
+    if (!buffer || selection.size === 0) return;
     const indices = [...selection];
     const id = groupIdRef.current++;
-    setGroups((gs) => [...gs, { id, name: `그룹 ${id}`, indices, hidden: false, color: avgHex(indices) }]);
+    setGroups((gs) => [...gs, { id, name: `그룹 ${id}`, indices, hidden: false, color: avgColorHex(viewOf(buffer), indices, indices.length) }]);
     setStatus(`group ${id}: ${indices.length} gaussians`);
   }
   function selectGroup(g: Group) { setSelection(new Set(g.indices)); }
@@ -560,7 +538,7 @@ export default function App() {
     setGroups((gs) => gs.map((g) => (g.id === id ? { ...g, color } : g)));
     const g = groups.find((x) => x.id === id);
     if (!g || !buffer) return;
-    const r = parseInt(color.slice(1, 3), 16), gg = parseInt(color.slice(3, 5), 16), bb = parseInt(color.slice(5, 7), 16);
+    const [r, gg, bb] = hexToRgb(color);
     pushUndo(buffer);
     const nb = buffer.slice();
     const dv = new DataView(nb.buffer);
@@ -687,8 +665,8 @@ export default function App() {
   }
 
   const stats = React.useMemo(() => {
-    if (!buffer || !bounds) return null;
-    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    if (!showStats || !buffer || !bounds) return null; // only scan when the panel is open
+    const dv = viewOf(buffer);
     const slots = buffer.length / 8;
     let live = 0;
     for (let i = 0; i < slots; i++) if (dv.getUint8(i * 32 + 31) !== 0) live++;
@@ -696,7 +674,7 @@ export default function App() {
       live, slots, mb: buffer.byteLength / 1048576,
       size: [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]] as const,
     };
-  }, [buffer, bounds]);
+  }, [showStats, buffer, bounds]);
 
   function undo() {
     if (undoStack.length === 0 || !buffer) return;
@@ -723,23 +701,7 @@ export default function App() {
     setSplatKey((k) => k + 1);
   }
 
-  // Keyboard shortcuts: Ctrl/Cmd+Z undo, +Shift/Ctrl+Y redo, Delete, Esc clear.
-  // Latest handlers via ref so the listener binds once.
-  const keyRef = React.useRef({ undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: false });
-  keyRef.current = { undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: selection.size > 0 };
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA")) return;
-      const k = keyRef.current, key = e.key.toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && key === "z") { e.preventDefault(); if (e.shiftKey) k.redo(); else k.undo(); }
-      else if ((e.ctrlKey || e.metaKey) && key === "y") { e.preventDefault(); k.redo(); }
-      else if ((key === "delete" || key === "backspace") && k.hasSel) { e.preventDefault(); k.del(); }
-      else if (key === "escape") { k.clearSel(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useKeyboardShortcuts({ undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: selection.size > 0 });
 
   const display = liveBuffer ?? displayBuffer;
 
