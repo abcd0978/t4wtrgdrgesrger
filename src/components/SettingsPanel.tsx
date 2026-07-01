@@ -30,10 +30,6 @@ export interface SceneOpts {
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
   cameraToOrigin: () => void;
-  bookmarks: { p: [number, number, number]; t: [number, number, number] }[];
-  saveBookmark: () => void;
-  restoreBookmark: (i: number) => void;
-  deleteBookmark: (i: number) => void;
   rotateScene: (axis: 0 | 1 | 2, deg: number) => void;
   bounds: Bounds | null;
 }
@@ -46,7 +42,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, bounds } = scene;
   const disabledLayer = { display: "flex", gap: 6, alignItems: "center", opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -130,13 +126,6 @@ export function SettingsPanel({
         <button style={{ flex: 1 }} onClick={() => setView([0, -1, 0])}>정면</button>
         <button style={{ flex: 1 }} onClick={() => setView([1, 0, 0])}>측면</button>
       </div>
-      <button onClick={saveBookmark}>현재 시점 북마크 저장</button>
-      {bookmarks.map((_, i) => (
-        <div key={i} style={{ display: "flex", gap: 6 }}>
-          <button style={{ flex: 1 }} onClick={() => restoreBookmark(i)}>북마크 {i + 1}</button>
-          <button className="ghost icon" onClick={() => deleteBookmark(i)} title="삭제">✕</button>
-        </div>
-      ))}
 
       <b>씬 회전 (기울기 보정)</b>
       {(["X", "Y", "Z"] as const).map((ax, i) => (

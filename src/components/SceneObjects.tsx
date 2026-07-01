@@ -298,9 +298,10 @@ function poseAt(path: CamPose[], ms: number): CamPose | null {
 /** Record the camera pose (pos + orbit target) over time into recRef while
  * `recording`; replay it while `playing` (reporting progress via onProgress);
  * or jump to `seekMs` (timeline scrub) when not playing. Framerate-independent. */
-export function CameraPath({ recording, playing, recRef, path, seekMs, onProgress, onPlayEnd }: {
+export function CameraPath({ recording, playing, loop, recRef, path, seekMs, onProgress, onPlayEnd }: {
   recording: boolean;
   playing: boolean;
+  loop?: boolean;
   recRef: React.MutableRefObject<CamPose[]>;
   path: CamPose[];
   seekMs: number | null;
@@ -319,11 +320,13 @@ export function CameraPath({ recording, playing, recRef, path, seekMs, onProgres
     controls.update();
   };
 
-  // Scrub: apply the seek pose when it changes (and we're not playing).
+  // Scrub: apply the seek pose only when the user actually moves it. Keyed on
+  // seekMs alone (not `playing`) so stopping a tour/playback doesn't snap the
+  // camera back to a stale scrub position.
   React.useEffect(() => {
     if (!playing && seekMs != null) apply(poseAt(path, seekMs));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seekMs, playing]);
+  }, [seekMs]);
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1);
@@ -346,8 +349,10 @@ export function CameraPath({ recording, playing, recRef, path, seekMs, onProgres
       if (!prevPlay.current) { playT.current = seekMs ?? 0; lastReport.current = -1; }
       playT.current += dt;
       const end = path[path.length - 1].ms;
-      if (playT.current >= end) { onProgress(end); onPlayEnd(); }
-      else {
+      if (playT.current >= end) {
+        if (loop) { playT.current = playT.current % end || 0; apply(poseAt(path, playT.current)); }
+        else { onProgress(end); onPlayEnd(); }
+      } else {
         apply(poseAt(path, playT.current));
         if (playT.current - lastReport.current > 0.07) { lastReport.current = playT.current; onProgress(playT.current); }
       }

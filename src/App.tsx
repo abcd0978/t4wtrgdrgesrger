@@ -119,6 +119,7 @@ export default function App() {
   const [camReplaying, setCamReplaying] = React.useState(false);
   const [camPath, setCamPath] = React.useState<CamPose[]>([]);
   const [camSeekMs, setCamSeekMs] = React.useState(0);
+  const [touring, setTouring] = React.useState(false); // smoothly cycling through bookmarks
   const camRecRef = React.useRef<CamPose[]>([]);
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
@@ -813,10 +814,33 @@ export default function App() {
   }
   function restoreBookmark(i: number) {
     const v = bookmarks[i];
-    if (v) camApiRef.current?.apply(v.p, v.t);
+    if (v) { setTouring(false); camApiRef.current?.apply(v.p, v.t); }
   }
   function deleteBookmark(i: number) {
     setBookmarks((b) => b.filter((_, j) => j !== i));
+  }
+  // Reorder a bookmark up (-1) / down (+1) — sets the tour order too.
+  function moveBookmark(i: number, dir: -1 | 1) {
+    setBookmarks((b) => {
+      const j = i + dir;
+      if (j < 0 || j >= b.length) return b;
+      const next = b.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }
+  // Bookmark tour: glide the camera through the bookmarks in order, looping.
+  const TOUR_SEG = 2.5; // seconds spent gliding between two bookmarks
+  const tourPoses = React.useMemo<CamPose[]>(() => {
+    if (bookmarks.length < 2) return [];
+    const poses: CamPose[] = bookmarks.map((b, i) => ({ p: b.p, t: b.t, ms: i * TOUR_SEG }));
+    poses.push({ ...bookmarks[0], ms: bookmarks.length * TOUR_SEG }); // return to start → seamless loop
+    return poses;
+  }, [bookmarks]);
+  function bookmarkTour() {
+    if (bookmarks.length < 2) { setStatus("북마크가 2개 이상이어야 순회 가능"); return; }
+    setCamReplaying(false); setCamRecording(false); setAutoOrbit(false); setCamSeekMs(0);
+    setTouring(true);
   }
 
   // Camera path record / replay.
@@ -826,14 +850,14 @@ export default function App() {
       setCamPath(camRecRef.current.slice());
       setStatus(`카메라 경로 녹화됨 (${camRecRef.current.length} keyframes)`);
     } else {
-      setCamReplaying(false);
+      setCamReplaying(false); setTouring(false);
       setCamRecording(true);
       setStatus("카메라 경로 녹화 중… (카메라를 움직이세요)");
     }
   }
   function playCamPath() {
     if (camPath.length < 2) { setStatus("녹화된 카메라 경로가 없음"); return; }
-    setCamRecording(false);
+    setCamRecording(false); setTouring(false);
     setCamReplaying(true);
   }
 
@@ -899,7 +923,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -990,6 +1014,20 @@ export default function App() {
                 <button className="ghost" onClick={() => { setCamReplaying(false); setCamPath([]); setCamSeekMs(0); }}>경로 지우기</button>
               </>
             )}
+            <hr className="divider" />
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="muted">북마크 (시점)</span>
+              {bookmarks.length >= 2 && <button className={touring ? "active icon" : "icon"} onClick={() => (touring ? setTouring(false) : bookmarkTour())} title="북마크를 부드럽게 순회">{touring ? "⏸ 순회" : "▶ 순회"}</button>}
+            </div>
+            <button onClick={saveBookmark}>＋ 현재 시점 저장</button>
+            {bookmarks.map((_, i) => (
+              <div key={i} className="row" style={{ gap: 5 }}>
+                <button className="grow" style={{ textAlign: "left" }} onClick={() => restoreBookmark(i)} title="이 시점으로 이동">📌 북마크 {i + 1}</button>
+                <button className="ghost icon" onClick={() => moveBookmark(i, -1)} disabled={i === 0} title="위로">▲</button>
+                <button className="ghost icon" onClick={() => moveBookmark(i, 1)} disabled={i === bookmarks.length - 1} title="아래로">▼</button>
+                <button className="ghost icon" onClick={() => deleteBookmark(i)} title="삭제">✕</button>
+              </div>
+            ))}
           </FloatingPanel>
         );
       })()}
@@ -1070,8 +1108,8 @@ export default function App() {
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}
-        <AutoOrbit enabled={autoOrbit && !camReplaying} speed={autoOrbitSpeed} />
-        <CameraPath recording={camRecording} playing={camReplaying} recRef={camRecRef} path={camPath} seekMs={camSeekMs} onProgress={setCamSeekMs} onPlayEnd={() => setCamReplaying(false)} />
+        <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
+        <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => setCamReplaying(false)} />
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />
