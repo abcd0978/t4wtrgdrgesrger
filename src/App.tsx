@@ -398,6 +398,42 @@ export default function App() {
   }
   function showAll() { setVis({ mode: "all", set: new Set() }); }
 
+  // Invert: select every visible gaussian that isn't currently selected.
+  function invertSelection() {
+    if (!buffer) return;
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const n = buffer.length / 8;
+    const next = new Set<number>();
+    for (let i = 0; i < n; i++) if (dv.getUint8(i * 32 + 31) !== 0 && !selection.has(i)) next.add(i);
+    setSelection(next);
+    setStatus(`inverted → ${next.size} selected`);
+  }
+
+  // Grow: add every visible gaussian inside the (slightly padded) bounding box of
+  // the current selection — a cheap way to fill out the region you picked.
+  function growSelection() {
+    if (!buffer || selection.size === 0) return;
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
+    for (const i of selection) {
+      const b = i * 32, x = dv.getFloat32(b, true), y = dv.getFloat32(b + 4, true), z = dv.getFloat32(b + 8, true);
+      if (x < mnx) mnx = x; if (y < mny) mny = y; if (z < mnz) mnz = z;
+      if (x > mxx) mxx = x; if (y > mxy) mxy = y; if (z > mxz) mxz = z;
+    }
+    const pad = 0.05 * Math.max(mxx - mnx, mxy - mny, mxz - mnz, 1e-6);
+    mnx -= pad; mny -= pad; mnz -= pad; mxx += pad; mxy += pad; mxz += pad;
+    const n = buffer.length / 8;
+    const next = new Set(selection);
+    for (let i = 0; i < n; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      const x = dv.getFloat32(b, true), y = dv.getFloat32(b + 4, true), z = dv.getFloat32(b + 8, true);
+      if (x >= mnx && x <= mxx && y >= mny && y <= mxy && z >= mnz && z <= mxz) next.add(i);
+    }
+    setSelection(next);
+    setStatus(`grown → ${next.size} selected`);
+  }
+
   function onMeasurePick(p: [number, number, number]) {
     setMeasurePts((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
   }
@@ -685,6 +721,10 @@ export default function App() {
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="panel-title">선택 {selection.size.toLocaleString()}개</span>
               <button className="ghost icon" onClick={() => setSelection(new Set())} title="선택 해제">✕</button>
+            </div>
+            <div className="row">
+              <button className="grow" onClick={invertSelection}>선택 반전</button>
+              <button className="grow" onClick={growSelection} title="선택 영역(박스)을 채워 확장">확장</button>
             </div>
 
             <label className="row muted">이동
