@@ -17,7 +17,7 @@
 9. ✅ **좌표축 · 측정** — 두 점 클릭으로 실측 거리. (스케일 바는 불필요해서 제거)
 
 ## 💾 데이터 (Data)
-10. ✅ **내보내기 / 불러오기** — 편집한 가우시안을 `.ply`(표준 3DGS)로 다운로드 + 로컬 `.ply` 파일 로드. (`.npz`는 미구현)
+10. ✅ **내보내기 / 불러오기** — `.ply`(표준 3DGS) + `.npz`(데이터 contract: mean/color/opacity/scale/rot/frame) 다운로드 + 로컬 `.ply` 로드.
 11. ✅ **스크린샷** — 현재 화면을 PNG로 저장.
 12. ✅ **통계 패널** — 가우시안 수, 바운드 크기, 선택 수, 메모리.
 13. ✅ **검색 / 필터 선택** — 색 유사도(허용오차)·불투명도 범위로 선택 (기존 선택에 추가/선택 평균색 추출). 위치범위·voxel은 미구현.
@@ -72,8 +72,8 @@
 - **레이어 on/off 패널** — Gaussian / Trajectory / Camera pose / Point cloud / Grid·Axes 통합 토글 (현재 grid·axes만 분산).
 - **구조화된 Error / Empty state** — run 없음 · gaussian 없음 · 필수 field 누락 · 서버 연결 끊김 · 미지원 schema · trajectory 없음 등 명확한 안내 화면 (현재는 상단 status 문자열만).
 - **상태 오버레이 확장** — 연결 상태 · 현재 timestamp · trajectory point count 등 (현재 통계 패널은 gaussian 수·bounds·선택·메모리).
-- **Timestamp 기준 replay** (현재는 frame index 스크럽).
-- **.npz 내보내기** (현재 .ply만) · **거리 기반 LOD** · **GPU picking(#19)**.
+- **Timestamp 기준 replay** (현재는 frame index 스크럽; timestamp는 서버 데이터 필요).
+- **거리 기반 LOD** · **GPU picking(#19)** — 프론트만으로 가능하나 리스크/규모 있음(후순위).
 
 ### 참고
 요구사항은 **viser(Python) 기반**을 기본 검토로 명시. 현재는 viser 렌더러를 포팅한 **브라우저-직접** 방식이라 3D 맵/편집은 충족하나, trajectory·pose·live status는 **서버 API + UI 추가**가 필요. (viser로 갈지, 이 브라우저 뷰어 + 별도 서버 API로 갈지는 9절 미팅 결정사항.)

@@ -5,7 +5,8 @@ import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
-import { rotateCovariance, scaleCovariance, rotationAboutAxis } from "./lib/mathUtils";
+import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
+import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -601,6 +602,42 @@ export default function App() {
     setStatus("exported .ply");
   }
 
+  // Export the live gaussians as an .npz matching the data contract
+  // (mean_xyz, color_rgb, opacity, scale_xyz, rotation_xyzw, source_frame_index).
+  function exportNpz() {
+    if (!buffer) return;
+    const dv = viewOf(buffer);
+    const slots = buffer.length / 8;
+    const liveIdx: number[] = [];
+    for (let i = 0; i < slots; i++) if (dv.getUint8(i * 32 + 31) !== 0) liveIdx.push(i);
+    const n = liveIdx.length;
+    const mean = new Float32Array(n * 3), color = new Float32Array(n * 3), opacity = new Float32Array(n);
+    const scaleA = new Float32Array(n * 3), rot = new Float32Array(n * 4), frame = new Int32Array(n);
+    const frames = frameArrayFull();
+    const cov = [0, 0, 0, 0, 0, 0];
+    for (let j = 0; j < n; j++) {
+      const i = liveIdx[j], b = i * 32;
+      mean[j * 3] = dv.getFloat32(b, true); mean[j * 3 + 1] = dv.getFloat32(b + 4, true); mean[j * 3 + 2] = dv.getFloat32(b + 8, true);
+      color[j * 3] = dv.getUint8(b + 28) / 255; color[j * 3 + 1] = dv.getUint8(b + 29) / 255; color[j * 3 + 2] = dv.getUint8(b + 30) / 255;
+      opacity[j] = dv.getUint8(b + 31) / 255;
+      readCov6(dv, b, cov);
+      const { scale: s, quaternion: q } = covarianceToScaleRotation(cov);
+      scaleA[j * 3] = s[0]; scaleA[j * 3 + 1] = s[1]; scaleA[j * 3 + 2] = s[2];
+      rot[j * 4] = q[1]; rot[j * 4 + 1] = q[2]; rot[j * 4 + 2] = q[3]; rot[j * 4 + 3] = q[0]; // wxyz -> xyzw
+      frame[j] = frames ? frames[i] : -1;
+    }
+    const npz = makeNpz([
+      { name: "mean_xyz.npy", bytes: npyBytes("<f4", [n, 3], mean) },
+      { name: "color_rgb.npy", bytes: npyBytes("<f4", [n, 3], color) },
+      { name: "opacity.npy", bytes: npyBytes("<f4", [n], opacity) },
+      { name: "scale_xyz.npy", bytes: npyBytes("<f4", [n, 3], scaleA) },
+      { name: "rotation_xyzw.npy", bytes: npyBytes("<f4", [n, 4], rot) },
+      { name: "source_frame_index.npy", bytes: npyBytes("<i4", [n], frame) },
+    ]);
+    downloadBlob(npz, `${runId || "gaussians"}.npz`);
+    setStatus(`exported .npz (${n} gaussians)`);
+  }
+
   // Export only the selected gaussians as a .ply.
   function exportSelectionPly() {
     if (!buffer || selection.size === 0) return;
@@ -807,6 +844,7 @@ export default function App() {
         <Dropdown label="파일" className="menu-only">
           <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY 열기</button>
           <button onClick={exportPly} disabled={!buffer}>.ply 내보내기</button>
+          <button onClick={exportNpz} disabled={!buffer}>.npz 내보내기</button>
           <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
           <button onClick={share} disabled={!buffer}>URL 공유</button>
         </Dropdown>

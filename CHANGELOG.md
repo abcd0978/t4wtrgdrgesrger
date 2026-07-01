@@ -1,5 +1,9 @@
 # 변경 내역 (Changelog)
 
+## .npz 내보내기 (데이터 contract)
+
+- `파일 ▾ .npz 내보내기` — 살아있는 가우시안을 데이터 contract(mean_xyz·color_rgb·opacity·scale_xyz·rotation_xyzw·source_frame_index) npz로 저장. 의존성 없는 npy+STORE zip 라이터(`src/lib/npzWrite.ts`), 우리 리더/numpy 호환. `npm test`에 왕복 셀프체크 추가.
+
 ## 검수 도구 요구사항: Empty/Error state · 상태 오버레이 · 레이어 패널
 
 - **구조화된 Empty/Error state** — 맵이 없을 때 중앙에 명확한 안내(불러오는 중 / 오류 / 서버 연결 안 됨 / 데이터 없음). getRuns 실패로 서버 연결 감지.
