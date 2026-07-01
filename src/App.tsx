@@ -8,7 +8,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
@@ -121,6 +121,11 @@ export default function App() {
   const [camSeekMs, setCamSeekMs] = React.useState(0);
   const [touring, setTouring] = React.useState(false); // smoothly cycling through bookmarks
   const camRecRef = React.useRef<CamPose[]>([]);
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const videoRecRef = React.useRef<MediaRecorder | null>(null);
+  const [videoRec, setVideoRec] = React.useState(false);
+  const turntableTimer = React.useRef<number | null>(null);
+  const [clipSweep, setClipSweep] = React.useState(false);
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
@@ -861,6 +866,55 @@ export default function App() {
     setCamReplaying(true);
   }
 
+  // --- Video export (WebM) via canvas.captureStream + MediaRecorder ---
+  function startVideoRecording(name: string): boolean {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof MediaRecorder === "undefined" || !canvas.captureStream) {
+      setStatus("이 브라우저는 영상 녹화를 지원하지 않음"); return false;
+    }
+    const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]
+      .find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    const rec = new MediaRecorder(canvas.captureStream(30), mime ? { mimeType: mime, videoBitsPerSecond: 12_000_000 } : undefined);
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => { downloadBlob(new Blob(chunks, { type: rec.mimeType || "video/webm" }), name); setVideoRec(false); videoRecRef.current = null; };
+    rec.start();
+    videoRecRef.current = rec; setVideoRec(true);
+    return true;
+  }
+  function stopVideoRecording() {
+    if (turntableTimer.current) { clearTimeout(turntableTimer.current); turntableTimer.current = null; }
+    setAutoOrbit(false); setCamReplaying(false);
+    videoRecRef.current?.stop();
+  }
+  // Record a flythrough of the recorded camera path (auto-stops at path end).
+  function exportFlythrough() {
+    if (camPath.length < 2) { setStatus("녹화된 카메라 경로가 없음 (먼저 경로 녹화)"); return; }
+    if (!startVideoRecording(`${runId || "viser"}_flythrough.webm`)) return;
+    setCamRecording(false); setTouring(false); setCamSeekMs(0); setCamReplaying(true);
+  }
+  // Record one full turntable revolution (auto-stops after ~360°).
+  function exportTurntable() {
+    if (!buffer) return;
+    if (!startVideoRecording(`${runId || "viser"}_turntable.webm`)) return;
+    setCamReplaying(false); setTouring(false); setAutoOrbit(true);
+    const durMs = (2 * Math.PI / autoOrbitSpeed) * 1000 * 1.05 + 200;
+    turntableTimer.current = window.setTimeout(() => { setAutoOrbit(false); videoRecRef.current?.stop(); }, durMs);
+  }
+
+  // High-res screenshot: briefly bump DPR, let it render, capture, restore.
+  function captureHiRes(scale: number) {
+    if (!buffer) return;
+    const prev = dpr;
+    setDpr(Math.min(prev * scale, 8));
+    setStatus(`${scale}× 스크린샷 렌더링…`);
+    window.setTimeout(() => {
+      captureRef.current?.(`${runId || "viser"}_${scale}x.png`);
+      setDpr(prev);
+      setStatus(`${scale}× 스크린샷 저장됨`);
+    }, 200);
+  }
+
   // Put the camera at the world origin (where the axes gizmo sits — usually the
   // capture/reference origin), looking at the data centre.
   function cameraToOrigin() {
@@ -897,6 +951,8 @@ export default function App() {
           <button onClick={exportPly} disabled={!buffer}>.ply 내보내기</button>
           <button onClick={exportNpz} disabled={!buffer}>.npz 내보내기</button>
           <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
+          <button onClick={() => captureHiRes(2)} disabled={!buffer}>스크린샷 2×</button>
+          <button onClick={() => captureHiRes(4)} disabled={!buffer}>스크린샷 4×</button>
           <button onClick={share} disabled={!buffer}>URL 공유</button>
         </Dropdown>
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
@@ -923,7 +979,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1015,6 +1071,13 @@ export default function App() {
               </>
             )}
             <hr className="divider" />
+            <div className="muted">영상 내보내기 (WebM)</div>
+            <div className="row" style={{ gap: 6 }}>
+              <button className="grow" onClick={exportFlythrough} disabled={camPath.length < 2 || videoRec}>🎬 경로 영상</button>
+              <button className="grow" onClick={exportTurntable} disabled={!buffer || videoRec}>🎠 턴테이블</button>
+            </div>
+            {videoRec && <button className="danger" onClick={stopVideoRecording}>■ 녹화 중지 &amp; 저장</button>}
+            <hr className="divider" />
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="muted">북마크 (시점)</span>
               {bookmarks.length >= 2 && <button className={touring ? "active icon" : "icon"} onClick={() => (touring ? setTouring(false) : bookmarkTour())} title="북마크를 부드럽게 순회">{touring ? "⏸ 순회" : "▶ 순회"}</button>}
@@ -1085,6 +1148,15 @@ export default function App() {
         </div>
       )}
 
+      {videoRec && (
+        <div className="panel" style={{ top: 62, left: "50%", transform: "translateX(-50%)", zIndex: 6 }}>
+          <div className="panel-section" style={{ flexDirection: "row", alignItems: "center", padding: "8px 14px", gap: 10 }}>
+            <span className="rec-dot" /><span style={{ fontWeight: 700 }}>영상 녹화중</span>
+            <button className="danger" onClick={stopVideoRecording}>■ 정지 &amp; 저장</button>
+          </div>
+        </div>
+      )}
+
       {drag && (
         <div style={{
           position: "absolute", zIndex: 2, pointerEvents: "none",
@@ -1109,9 +1181,10 @@ export default function App() {
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}
         <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
-        <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => setCamReplaying(false)} />
+        <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => { setCamReplaying(false); if (videoRecRef.current) videoRecRef.current.stop(); }} />
+        {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}
         <KeyboardFly />
-        <CanvasCapture captureRef={captureRef} download={downloadBlob} />
+        <CanvasCapture captureRef={captureRef} canvasRef={canvasRef} download={downloadBlob} />
         <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}

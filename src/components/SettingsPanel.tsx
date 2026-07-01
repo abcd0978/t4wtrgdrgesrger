@@ -31,6 +31,7 @@ export interface SceneOpts {
   setView: (dir: [number, number, number]) => void;
   cameraToOrigin: () => void;
   rotateScene: (axis: 0 | 1 | 2, deg: number) => void;
+  clipSweep: boolean; setClipSweep: (v: boolean) => void;
   bounds: Bounds | null;
 }
 
@@ -42,7 +43,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
   const disabledLayer = { display: "flex", gap: 6, alignItems: "center", opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -106,8 +107,9 @@ export function SettingsPanel({
             min={bounds.min[ca]} max={bounds.max[ca]}
             step={(bounds.max[ca] - bounds.min[ca]) / 200 || 0.001}
             value={settings.clipPos}
-            onChange={(e) => setSettings((s) => ({ ...s, clipPos: parseFloat(e.target.value) }))}
+            onChange={(e) => { setClipSweep(false); setSettings((s) => ({ ...s, clipPos: parseFloat(e.target.value) })); }}
             style={{ width: "100%" }} />
+          <button className={clipSweep ? "active" : ""} onClick={() => setClipSweep(!clipSweep)}>{clipSweep ? "■ 스윕 정지" : "▶ 단면 스윕 애니메이션"}</button>
         </>
       )}
 

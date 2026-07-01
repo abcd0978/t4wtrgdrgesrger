@@ -389,6 +389,24 @@ export function AutoOrbit({ enabled, speed }: { enabled: boolean; speed: number 
   return null;
 }
 
+/** Sweep the clipping plane back and forth across [min,max] to reveal the
+ * interior. Throttled to ~30/s so the per-frame setState doesn't churn React. */
+export function ClipSweep({ enabled, min, max, setPos }: {
+  enabled: boolean; min: number; max: number; setPos: (v: number) => void;
+}) {
+  const t = React.useRef(0), acc = React.useRef(0);
+  useFrame((_, delta) => {
+    if (!enabled) return;
+    const dt = Math.min(delta, 0.1);
+    t.current += dt; acc.current += dt;
+    if (acc.current < 0.03) return;
+    acc.current = 0;
+    const u = (1 - Math.cos((t.current / 4) * Math.PI * 2)) / 2; // 0→1→0 ease, 4s round trip
+    setPos(min + (max - min) * u);
+  });
+  return null;
+}
+
 /** Drag handle (sphere) at the selection centroid. Drag = move along the camera
  * plane. Built directly (raycast -> plane) because TransformControls' translate
  * is broken in this stack. onMove fires the running net delta live during the
