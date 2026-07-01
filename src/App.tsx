@@ -81,6 +81,7 @@ export default function App() {
     try { return JSON.parse(lsGet("bookmarks", "[]")); } catch { return []; }
   });
   const [bg, setBg] = React.useState("#ffffff");
+  const [showMap, setShowMap] = React.useState(true);
   const [showGrid, setShowGrid] = React.useState(true);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
   const [dpr, setDpr] = React.useState(1.5);
@@ -125,7 +126,11 @@ export default function App() {
   const selectionRef = React.useRef<Set<number>>(selection);
   selectionRef.current = selection;
 
-  React.useEffect(() => { getRuns(host).then(setRuns).catch(() => setRuns([])); }, [host]);
+  const [serverOk, setServerOk] = React.useState<boolean | null>(null);
+  const [lastUpdate, setLastUpdate] = React.useState<string>("");
+  React.useEffect(() => {
+    getRuns(host).then((rs) => { setRuns(rs); setServerOk(true); }).catch(() => { setRuns([]); setServerOk(false); });
+  }, [host]);
 
   // Remember the load inputs so a return visit doesn't need re-typing.
   React.useEffect(() => {
@@ -723,8 +728,16 @@ export default function App() {
   }
 
   useKeyboardShortcuts({ undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: selection.size > 0 });
+  React.useEffect(() => { if (buffer) setLastUpdate(new Date().toLocaleTimeString()); }, [buffer]);
 
   const display = liveBuffer ?? displayBuffer;
+
+  // Structured empty / error state shown centre-screen when there's no map.
+  const emptyState = display ? null
+    : busy ? { title: "불러오는 중…", sub: status, err: false }
+    : /error/i.test(status) ? { title: "오류", sub: status, err: true }
+    : serverOk === false ? { title: "Viewer Server에 연결할 수 없음", sub: "host 주소를 확인하고 다시 시도하세요.", err: true }
+    : { title: "표시할 데이터 없음", sub: "run을 선택하고 Load를 누르세요. (또는 도구 ▾ 없이 파일 ▾ → PLY 열기)", err: false };
 
   // LOD: render only every Nth gaussian when renderFrac < 1 (picking/editing still
   // use the full buffer via bufferRef, so only the drawn/sorted set shrinks).
@@ -820,7 +833,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -940,6 +953,16 @@ export default function App() {
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">바운드</span><span className="num">{stats.size.map((v) => v.toFixed(2)).join(" × ")}</span></div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">선택</span><span className="num">{selection.size.toLocaleString()}</span></div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">메모리</span><span className="num">{stats.mb.toFixed(1)} MB</span></div>
+            {frameCum && (
+              <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">프레임</span><span className="num">{frameIdx + 1} / {frameCum.length}</span></div>
+            )}
+            {frameCum && (
+              <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">새 가우시안</span><span className="num">+{(frameCum[frameIdx] - (frameIdx > 0 ? frameCum[frameIdx - 1] : 0)).toLocaleString()}</span></div>
+            )}
+            <hr className="divider" />
+            <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">서버 연결</span><span className="num" style={{ color: serverOk === false ? "var(--danger)" : serverOk ? "#33e08a" : "var(--text-dim)" }}>{serverOk === false ? "끊김" : serverOk ? "OK" : "—"}</span></div>
+            <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">마지막 업데이트</span><span className="num">{lastUpdate || "—"}</span></div>
+            {live && <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">라이브</span><span className="num" style={{ color: "#33e08a" }}>● 폴링 중</span></div>}
           </div>
         </div>
       )}
@@ -951,6 +974,16 @@ export default function App() {
           width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0),
           border: "1.5px solid var(--accent)", background: "rgba(255,139,61,0.15)", borderRadius: 4,
         }} />
+      )}
+
+      {emptyState && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 1, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+          <div className="panel" style={{ position: "static", padding: "20px 26px", textAlign: "center", maxWidth: "min(420px, calc(100vw - 40px))" }}>
+            <div style={{ fontSize: 34, marginBottom: 8 }}>{emptyState.err ? "⚠️" : "📦"}</div>
+            <div className="panel-title" style={{ fontSize: 16, color: emptyState.err ? "var(--danger)" : "var(--text)" }}>{emptyState.title}</div>
+            <div className="muted" style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>{emptyState.sub}</div>
+          </div>
+        </div>
       )}
 
       <Canvas dpr={dpr} gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
@@ -976,7 +1009,7 @@ export default function App() {
               <FitCamera bounds={bounds} enabled={!camDone && !pendingView.current} onFitted={() => setCamDone(true)} />
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
-                <SplatObject buffer={lod ?? display} />
+                {showMap && <SplatObject buffer={lod ?? display} />}
                 {buffer2 && (
                   <group position={[compareOffset, 0, 0]}>
                     <SplatObject buffer={buffer2} />

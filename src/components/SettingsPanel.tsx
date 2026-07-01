@@ -21,6 +21,7 @@ function NumSlider({
 
 export interface SceneOpts {
   bg: string; setBg: (v: string) => void;
+  showMap: boolean; setShowMap: (v: boolean) => void;
   showGrid: boolean; setShowGrid: (v: boolean) => void;
   grid: GridOpts; setGrid: React.Dispatch<React.SetStateAction<GridOpts>>;
   dpr: number; setDpr: (v: number) => void;
@@ -44,7 +45,8 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, bookmarks, saveBookmark, restoreBookmark, deleteBookmark, rotateScene, bounds } = scene;
+  const disabledLayer = { display: "flex", gap: 6, alignItems: "center", opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   return (
     <div className="scroll" style={{
@@ -70,13 +72,20 @@ export function SettingsPanel({
       <NumSlider label="falloff" k="falloffCutoff" min={1} max={9} step={0.25} settings={settings} setSettings={setSettings} />
       <NumSlider label="alphaTest" k="alphaTest" min={0} max={0.5} step={0.01} settings={settings} setSettings={setSettings} />
       <NumSlider label="fade" k="fadeSpeed" min={0.1} max={10} step={0.1} settings={settings} setSettings={setSettings} />
+      <b>레이어 (Layers)</b>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} /> Gaussian Map</label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} /> Grid</label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> Axes</label>
+      <label style={disabledLayer} title="Viewer Server API 필요"><input type="checkbox" disabled /> Trajectory <span style={{ fontSize: 11 }}>(서버 필요)</span></label>
+      <label style={disabledLayer} title="Viewer Server API 필요"><input type="checkbox" disabled /> Camera Pose / Frustum <span style={{ fontSize: 11 }}>(서버 필요)</span></label>
+      <label style={disabledLayer} title="Viewer Server API 필요"><input type="checkbox" disabled /> Point Cloud <span style={{ fontSize: 11 }}>(서버 필요)</span></label>
+
       <b>scene</b>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ width: 84 }}>background</span><input type="color" value={bg} onChange={(e) => setBg(e.target.value)} /></label>
-      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} /> grid <input type="color" value={grid.color} onChange={(e) => setGrid((g) => ({ ...g, color: e.target.value }))} /></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ width: 84 }}>grid 색</span><input type="color" value={grid.color} onChange={(e) => setGrid((g) => ({ ...g, color: e.target.value }))} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>grid div</span><input type="range" min={2} max={60} step={1} value={grid.divisions} onChange={(e) => setGrid((g) => ({ ...g, divisions: parseInt(e.target.value) }))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{grid.divisions}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
-      <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showAxes} onChange={(e) => setShowAxes(e.target.checked)} /> axes (XYZ)</label>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
 
       <b>클리핑 (단면)</b>
