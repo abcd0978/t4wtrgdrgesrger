@@ -1,29 +1,55 @@
 import React from "react";
+import { createPortal } from "react-dom";
 
-/** A toolbar button that opens a small popup menu of buttons (closes on outside
- * click or after choosing an item). `className` (e.g. "menu-only") is applied to
- * the wrapper — note: no inline `display` here so that rule can hide it. */
+/** A toolbar button that opens a small popup menu of buttons. The menu is
+ * portaled to <body> and fixed-positioned under the button, so it isn't clipped
+ * by the toolbar's overflow or hidden behind the canvas. Closes on outside
+ * click, item click, scroll, or resize. `className` applies to the wrapper. */
 export function Dropdown({ label, className, children }: {
   label: string;
   className?: string;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
+  const [pos, setPos] = React.useState<{ left: number; top: number } | null>(null);
+  const btnRef = React.useRef<HTMLButtonElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  const toggle = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ left: r.left, top: r.bottom + 4 });
+    setOpen((o) => !o);
+  };
+
   React.useEffect(() => {
     if (!open) return;
-    const onDoc = (e: PointerEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onDoc = (e: PointerEvent) => {
+      if (btnRef.current?.contains(e.target as Node) || menuRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const close = () => setOpen(false);
     window.addEventListener("pointerdown", onDoc);
-    return () => window.removeEventListener("pointerdown", onDoc);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDoc);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
   }, [open]);
+
   return (
-    <div ref={ref} className={className} style={{ position: "relative" }}>
-      <button className={open ? "active" : ""} onClick={() => setOpen((o) => !o)}>{label} ▾</button>
-      {open && (
-        <div className="panel" style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, minWidth: 150, padding: 6, display: "flex", flexDirection: "column", gap: 4, zIndex: 5 }} onClick={() => setOpen(false)}>
+    <span className={className}>
+      <button ref={btnRef} className={open ? "active" : ""} onClick={toggle}>{label} ▾</button>
+      {open && pos && createPortal(
+        <div ref={menuRef} className="panel" style={{
+          position: "fixed", left: pos.left, top: pos.top, minWidth: 150, maxWidth: "calc(100vw - 20px)",
+          padding: 6, display: "flex", flexDirection: "column", gap: 4, zIndex: 50,
+        }} onClick={() => setOpen(false)}>
           {children}
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </span>
   );
 }
