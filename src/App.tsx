@@ -15,6 +15,7 @@ import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
 type View = { p: [number, number, number]; t: [number, number, number] };
+type Group = { id: number; name: string; indices: number[]; hidden: boolean; color: string };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const FPS_MIN = 0.5, FPS_MAX = 60;
 
@@ -56,6 +57,9 @@ export default function App() {
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
   const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
   const [showTimeline, setShowTimeline] = React.useState(true);
+  const [showGroups, setShowGroups] = React.useState(false);
+  const [groups, setGroups] = React.useState<Group[]>([]);
+  const groupIdRef = React.useRef(1);
   const [showFilter, setShowFilter] = React.useState(false);
   const [filterColor, setFilterColor] = React.useState("#ffffff");
   const [filterTol, setFilterTol] = React.useState(60);
@@ -131,7 +135,7 @@ export default function App() {
     const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
     setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
     setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
-    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false);
+    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
     try {
       let final: Uint32Array | null = null;
       if (_mode === "snapshot") {
@@ -187,21 +191,29 @@ export default function App() {
   // The rendered buffer: timeline truncation + hide/isolate (alpha 0) + selection
   // highlight, all overlaid on a copy so edits stay on the real `buffer`. Same
   // length as `buffer` -> renderer updates in place (scrubbing stays snappy).
+  const groupHiddenSet = React.useMemo(() => {
+    const s = new Set<number>();
+    for (const g of groups) if (g.hidden) for (const i of g.indices) s.add(i);
+    return s;
+  }, [groups]);
+
   const displayBuffer = React.useMemo(() => {
     if (!buffer) return null;
     // At the last frame, show the whole (possibly edited) buffer; only truncate
     // when scrubbed back. Keeps edits/duplicates visible in delta mode.
     const scrubbing = frameCum != null && frameIdx < frameCum.length - 1;
     const frontier = scrubbing ? frameCum![frameIdx] : Infinity;
-    if (selection.size === 0 && vis.mode === "all" && !scrubbing) return buffer;
+    const gHide = groupHiddenSet.size > 0;
+    if (selection.size === 0 && vis.mode === "all" && !scrubbing && !gHide) return buffer;
     const hb = buffer.slice();
     const dv = new DataView(hb.buffer);
     const slots = hb.length / 8;
-    if (scrubbing || vis.mode !== "all") {
+    if (scrubbing || vis.mode !== "all" || gHide) {
       for (let i = 0; i < slots; i++) {
         let hide = i >= frontier;
         if (vis.mode === "hide") hide = hide || vis.set.has(i);
         else if (vis.mode === "isolate") hide = hide || !vis.set.has(i);
+        if (gHide && groupHiddenSet.has(i)) hide = true;
         if (hide) dv.setUint8(i * 32 + 31, 0);
       }
     }
@@ -211,7 +223,7 @@ export default function App() {
       }
     }
     return hb;
-  }, [buffer, selection, vis, frameCum, frameIdx]);
+  }, [buffer, selection, vis, frameCum, frameIdx, groupHiddenSet]);
 
   bufferRef.current = displayBuffer; // pick against what's actually visible
 
@@ -484,6 +496,38 @@ export default function App() {
     setFilterColor(`#${hx(r)}${hx(g)}${hx(bl)}`);
   }
 
+  // --- groups: save a selection, then reselect / hide / recolor / remove it ---
+  function avgHex(indices: number[]): string {
+    if (!buffer || indices.length === 0) return "#cccccc";
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let r = 0, g = 0, bl = 0;
+    for (const i of indices) { const b = i * 32; r += dv.getUint8(b + 28); g += dv.getUint8(b + 29); bl += dv.getUint8(b + 30); }
+    const hx = (v: number) => Math.round(v / indices.length).toString(16).padStart(2, "0");
+    return `#${hx(r)}${hx(g)}${hx(bl)}`;
+  }
+  function createGroup() {
+    if (selection.size === 0) return;
+    const indices = [...selection];
+    const id = groupIdRef.current++;
+    setGroups((gs) => [...gs, { id, name: `그룹 ${id}`, indices, hidden: false, color: avgHex(indices) }]);
+    setStatus(`group ${id}: ${indices.length} gaussians`);
+  }
+  function selectGroup(g: Group) { setSelection(new Set(g.indices)); }
+  function toggleGroupHide(id: number) { setGroups((gs) => gs.map((g) => (g.id === id ? { ...g, hidden: !g.hidden } : g))); }
+  function removeGroup(id: number) { setGroups((gs) => gs.filter((g) => g.id !== id)); }
+  function recolorGroup(id: number, color: string) {
+    setGroups((gs) => gs.map((g) => (g.id === id ? { ...g, color } : g)));
+    const g = groups.find((x) => x.id === id);
+    if (!g || !buffer) return;
+    const r = parseInt(color.slice(1, 3), 16), gg = parseInt(color.slice(3, 5), 16), bb = parseInt(color.slice(5, 7), 16);
+    pushUndo(buffer);
+    const nb = buffer.slice();
+    const dv = new DataView(nb.buffer);
+    for (const i of g.indices) { const b = i * 32; dv.setUint8(b + 28, r); dv.setUint8(b + 29, gg); dv.setUint8(b + 30, bb); }
+    setBuffer(nb);
+    setStatus(`recolored ${g.name}`);
+  }
+
   function onMeasurePick(p: [number, number, number]) {
     setMeasurePts((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
   }
@@ -546,7 +590,7 @@ export default function App() {
     setBusy(true); setStatus(`reading ${file.name}…`);
     setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
-    setPlaying(false); setCamDone(false); pendingView.current = null;
+    setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
       const { buffer: b, frameCum: fc } = parsePly(await file.arrayBuffer());
       setBuffer(b); setBounds(computeBounds(b));
@@ -634,7 +678,7 @@ export default function App() {
     if (!ob) return;
     const copy = ob.slice();
     setBuffer(copy); setBounds(computeBounds(copy));
-    setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
+    setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null); setGroups([]);
     setSplatKey((k) => k + 1);
   }
 
@@ -731,6 +775,7 @@ export default function App() {
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
         <button className={"menu-only" + (measureMode ? " active" : "")} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
         <button className={"menu-only" + (showFilter ? " active" : "")} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
+        <button className={"menu-only" + (showGroups ? " active" : "")} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         <button className="menu-only" onClick={exportPly} disabled={!buffer}>내보내기</button>
         <button className="menu-only" onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
@@ -883,6 +928,27 @@ export default function App() {
               <input type="number" className="num grow" min={0} max={255} value={filterOpMax} onChange={(e) => setFilterOpMax(Math.max(0, parseInt(e.target.value) || 0))} />
             </div>
             <button onClick={filterByOpacity}>불투명도로 선택</button>
+          </div>
+        </div>
+      )}
+
+      {showGroups && (
+        <div className="panel scroll" style={{ top: 62, right: 8, width: "min(240px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
+          <div className="panel-section">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="panel-title">🗂 그룹</span>
+              <button className="ghost icon" onClick={() => setShowGroups(false)}>✕</button>
+            </div>
+            <button onClick={createGroup} disabled={selection.size === 0}>선택을 그룹으로 ({selection.size.toLocaleString()})</button>
+            {groups.length === 0 && <span className="muted" style={{ fontSize: 12 }}>그룹 없음. 선택 후 위 버튼으로 저장.</span>}
+            {groups.map((g) => (
+              <div key={g.id} className="row" style={{ gap: 5 }}>
+                <input type="color" value={g.color} onChange={(e) => recolorGroup(g.id, e.target.value)} title="그룹 색 적용" style={{ width: 26, height: 26, padding: 2, flex: "0 0 auto" }} />
+                <button className="grow" style={{ textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: g.hidden ? 0.5 : 1 }} onClick={() => selectGroup(g)} title="재선택">{g.name} · {g.indices.length.toLocaleString()}</button>
+                <button className="ghost icon" onClick={() => toggleGroupHide(g.id)} title={g.hidden ? "보이기" : "숨기기"}>{g.hidden ? "🚫" : "👁"}</button>
+                <button className="ghost icon" onClick={() => removeGroup(g.id)} title="그룹 해제(가우시안 유지)">✕</button>
+              </div>
+            ))}
           </div>
         </div>
       )}
