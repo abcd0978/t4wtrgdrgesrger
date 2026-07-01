@@ -56,6 +56,12 @@ export default function App() {
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
   const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
   const [showTimeline, setShowTimeline] = React.useState(true);
+  const [showFilter, setShowFilter] = React.useState(false);
+  const [filterColor, setFilterColor] = React.useState("#ffffff");
+  const [filterTol, setFilterTol] = React.useState(60);
+  const [filterAdd, setFilterAdd] = React.useState(false);
+  const [filterOpMin, setFilterOpMin] = React.useState(1);
+  const [filterOpMax, setFilterOpMax] = React.useState(255);
   const [bookmarks, setBookmarks] = React.useState<View[]>(() => {
     try { return JSON.parse(lsGet("bookmarks", "[]")); } catch { return []; }
   });
@@ -434,6 +440,50 @@ export default function App() {
     setStatus(`grown → ${next.size} selected`);
   }
 
+  // Filter-select by colour similarity (RGB euclidean distance <= tolerance).
+  function filterByColor() {
+    if (!buffer) return;
+    const tr = parseInt(filterColor.slice(1, 3), 16), tg = parseInt(filterColor.slice(3, 5), 16), tb = parseInt(filterColor.slice(5, 7), 16);
+    const tol2 = filterTol * filterTol;
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const n = buffer.length / 8;
+    const next = filterAdd ? new Set(selection) : new Set<number>();
+    for (let i = 0; i < n; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      const dr = dv.getUint8(b + 28) - tr, dg = dv.getUint8(b + 29) - tg, db = dv.getUint8(b + 30) - tb;
+      if (dr * dr + dg * dg + db * db <= tol2) next.add(i);
+    }
+    setSelection(next);
+    setStatus(`color filter → ${next.size} selected`);
+  }
+
+  // Filter-select by opacity range (u8 alpha in [min, max]).
+  function filterByOpacity() {
+    if (!buffer) return;
+    const lo = Math.min(filterOpMin, filterOpMax), hi = Math.max(filterOpMin, filterOpMax);
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const n = buffer.length / 8;
+    const next = filterAdd ? new Set(selection) : new Set<number>();
+    for (let i = 0; i < n; i++) {
+      const a = dv.getUint8(i * 32 + 31);
+      if (a !== 0 && a >= lo && a <= hi) next.add(i);
+    }
+    setSelection(next);
+    setStatus(`opacity filter → ${next.size} selected`);
+  }
+
+  // Set the filter colour to the average colour of the current selection.
+  function pickColorFromSelection() {
+    if (!buffer || selection.size === 0) return;
+    const dv = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    let r = 0, g = 0, bl = 0;
+    for (const i of selection) { const b = i * 32; r += dv.getUint8(b + 28); g += dv.getUint8(b + 29); bl += dv.getUint8(b + 30); }
+    const nn = selection.size;
+    const hx = (v: number) => Math.round(v / nn).toString(16).padStart(2, "0");
+    setFilterColor(`#${hx(r)}${hx(g)}${hx(bl)}`);
+  }
+
   function onMeasurePick(p: [number, number, number]) {
     setMeasurePts((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
   }
@@ -680,6 +730,7 @@ export default function App() {
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
         <button className={"menu-only" + (measureMode ? " active" : "")} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
+        <button className={"menu-only" + (showFilter ? " active" : "")} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         <button className="menu-only" onClick={exportPly} disabled={!buffer}>내보내기</button>
         <button className="menu-only" onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷</button>
@@ -798,6 +849,40 @@ export default function App() {
             </div>
             <span className="muted">가우시안 두 점을 더블클릭 ({measurePts.length}/2)</span>
             {measureDist != null && <span className="num" style={{ fontSize: 17, color: "var(--accent-2)" }}>거리: {measureDist.toFixed(3)}</span>}
+          </div>
+        </div>
+      )}
+
+      {showFilter && (
+        <div className="panel scroll" style={{ top: 62, right: 8, width: "min(230px, calc(100vw - 20px))", maxHeight: "calc(100dvh - 78px)" }}>
+          <div className="panel-section">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span className="panel-title">🔎 필터 선택</span>
+              <button className="ghost icon" onClick={() => setShowFilter(false)}>✕</button>
+            </div>
+            <label className="row"><input type="checkbox" checked={filterAdd} onChange={(e) => setFilterAdd(e.target.checked)} /> 기존 선택에 추가</label>
+
+            <hr className="divider" />
+            <div className="muted">색 유사도</div>
+            <label className="row">색
+              <input type="color" value={filterColor} onChange={(e) => setFilterColor(e.target.value)} />
+              <span className="grow" />
+              <button className="ghost" onClick={pickColorFromSelection} disabled={selection.size === 0} title="선택의 평균색">선택색</button>
+            </label>
+            <label className="row muted">허용
+              <input type="range" className="grow" min={0} max={300} step={5} value={filterTol} onChange={(e) => setFilterTol(parseInt(e.target.value))} />
+              <span className="num" style={{ width: 32, textAlign: "right" }}>{filterTol}</span>
+            </label>
+            <button onClick={filterByColor}>이 색으로 선택</button>
+
+            <hr className="divider" />
+            <div className="muted">불투명도 범위 (0–255)</div>
+            <div className="row">
+              <input type="number" className="num grow" min={0} max={255} value={filterOpMin} onChange={(e) => setFilterOpMin(Math.max(0, parseInt(e.target.value) || 0))} />
+              <span className="muted">~</span>
+              <input type="number" className="num grow" min={0} max={255} value={filterOpMax} onChange={(e) => setFilterOpMax(Math.max(0, parseInt(e.target.value) || 0))} />
+            </div>
+            <button onClick={filterByOpacity}>불투명도로 선택</button>
           </div>
         </div>
       )}
