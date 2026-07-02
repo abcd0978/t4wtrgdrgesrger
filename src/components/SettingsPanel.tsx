@@ -4,10 +4,13 @@ import { type GridOpts } from "./SceneObjects";
 import { type Bounds } from "../lib/bounds";
 import { useDragOffset } from "./FloatingPanel";
 
+// Keys of RenderSettings whose value is a plain number (crop corners are arrays).
+type NumKey = { [K in keyof RenderSettings]: RenderSettings[K] extends number ? K : never }[keyof RenderSettings];
+
 function NumSlider({
   label, k, min, max, step, settings, setSettings,
 }: {
-  label: string; k: keyof RenderSettings; min: number; max: number; step: number;
+  label: string; k: NumKey; min: number; max: number; step: number;
   settings: RenderSettings; setSettings: React.Dispatch<React.SetStateAction<RenderSettings>>;
 }) {
   return (

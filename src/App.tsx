@@ -5,7 +5,7 @@ import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
 import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
 import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
-import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
+import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation, eigenDecomposeSymmetric3 } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
@@ -457,6 +457,120 @@ export default function App() {
     }
     setBuffer(nb); setBounds(computeBounds(nb));
     setStatus(`scene rotated ${deg}° (${axis === 0 ? "X" : axis === 1 ? "Y" : "Z"})`);
+  }
+
+  // Auto-level: find the floor plane with RANSAC (refined by an eigen fit on
+  // the inliers), rotate the whole scene so the floor normal becomes +Z, and
+  // translate so the floor sits at z=0 with the scene centred on the origin.
+  // One click fixes tilted COLMAP captures. Undoable.
+  function autoLevel() {
+    if (!buffer || !bounds) return;
+    const dv = viewOf(buffer);
+    const slots = buffer.length / 8;
+    // Sample up to ~100k live positions (flat xyz).
+    const stride = Math.max(1, Math.floor(slots / 100_000));
+    const pts: number[] = [];
+    for (let i = 0; i < slots; i += stride) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      pts.push(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+    }
+    const n = pts.length / 3;
+    if (n < 100) { setStatus("자동 수평: 데이터가 너무 적음"); return; }
+    const thr = radius(bounds) * 0.01;
+    // Deterministic LCG so the button is reproducible run-to-run.
+    let seed = 123456789;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    let bestIn = 0, bn = [0, 0, 1], bd = 0;
+    for (let it = 0; it < 300; it++) {
+      const a = ((rnd() * n) | 0) * 3, b2 = ((rnd() * n) | 0) * 3, c2 = ((rnd() * n) | 0) * 3;
+      const ux = pts[b2] - pts[a], uy = pts[b2 + 1] - pts[a + 1], uz = pts[b2 + 2] - pts[a + 2];
+      const vx = pts[c2] - pts[a], vy = pts[c2 + 1] - pts[a + 1], vz = pts[c2 + 2] - pts[a + 2];
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const L = Math.hypot(nx, ny, nz);
+      if (L < 1e-12) continue;
+      nx /= L; ny /= L; nz /= L;
+      const d = -(nx * pts[a] + ny * pts[a + 1] + nz * pts[a + 2]);
+      let cnt = 0;
+      for (let j = 0; j < pts.length; j += 3) {
+        if (Math.abs(nx * pts[j] + ny * pts[j + 1] + nz * pts[j + 2] + d) < thr) cnt++;
+      }
+      if (cnt > bestIn) { bestIn = cnt; bn = [nx, ny, nz]; bd = d; }
+    }
+    if (bestIn < n * 0.05) { setStatus("자동 수평: 바닥 평면을 찾지 못함 (인라이어 부족)"); return; }
+    // Refine: centroid + covariance of inliers; the normal is the eigenvector
+    // of the smallest eigenvalue.
+    let mx = 0, my = 0, mz = 0, m = 0;
+    for (let j = 0; j < pts.length; j += 3) {
+      if (Math.abs(bn[0] * pts[j] + bn[1] * pts[j + 1] + bn[2] * pts[j + 2] + bd) < thr) {
+        mx += pts[j]; my += pts[j + 1]; mz += pts[j + 2]; m++;
+      }
+    }
+    mx /= m; my /= m; mz /= m;
+    const cvv = [0, 0, 0, 0, 0, 0];
+    for (let j = 0; j < pts.length; j += 3) {
+      if (Math.abs(bn[0] * pts[j] + bn[1] * pts[j + 1] + bn[2] * pts[j + 2] + bd) < thr) {
+        const dx = pts[j] - mx, dy = pts[j + 1] - my, dz = pts[j + 2] - mz;
+        cvv[0] += dx * dx; cvv[1] += dx * dy; cvv[2] += dx * dz; cvv[3] += dy * dy; cvv[4] += dy * dz; cvv[5] += dz * dz;
+      }
+    }
+    const eig = eigenDecomposeSymmetric3(cvv);
+    let k = 0;
+    if (eig.eigenvalues[1] < eig.eigenvalues[k]) k = 1;
+    if (eig.eigenvalues[2] < eig.eigenvalues[k]) k = 2;
+    let fn = [eig.eigenvectors[k], eig.eigenvectors[3 + k], eig.eigenvectors[6 + k]]; // column k
+    // Orient the normal "up": most of the scene should sit on the + side.
+    let above = 0;
+    const fd0 = -(fn[0] * mx + fn[1] * my + fn[2] * mz);
+    for (let j = 0; j < pts.length; j += 3) {
+      if (fn[0] * pts[j] + fn[1] * pts[j + 1] + fn[2] * pts[j + 2] + fd0 > 0) above++;
+    }
+    if (above < n / 2) fn = [-fn[0], -fn[1], -fn[2]];
+    // Rodrigues rotation taking fn -> +Z (row-major).
+    const dot = Math.min(1, Math.max(-1, fn[2]));
+    let R: number[];
+    if (dot > 0.999999) R = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    else if (dot < -0.999999) R = rotationAboutAxis(0, Math.PI);
+    else {
+      let ax = fn[1], ay = -fn[0]; // fn x z
+      const al = Math.hypot(ax, ay); ax /= al; ay /= al;
+      const th = Math.acos(dot), c = Math.cos(th), s = Math.sin(th), t = 1 - c;
+      R = [
+        t * ax * ax + c, t * ax * ay, s * ay,
+        t * ax * ay, t * ay * ay + c, -s * ax,
+        -s * ay, s * ax, c,
+      ];
+    }
+    // Translation: floor -> z=0, scene xy-centre -> origin (from rotated AABB corners).
+    const zf = R[6] * mx + R[7] * my + R[8] * mz;
+    let cminx = Infinity, cminy = Infinity, cminz = Infinity, cmaxx = -Infinity, cmaxy = -Infinity, cmaxz = -Infinity;
+    for (const cx of [bounds.min[0], bounds.max[0]]) for (const cy of [bounds.min[1], bounds.max[1]]) for (const cz of [bounds.min[2], bounds.max[2]]) {
+      const rx = R[0] * cx + R[1] * cy + R[2] * cz, ry = R[3] * cx + R[4] * cy + R[5] * cz, rz = R[6] * cx + R[7] * cy + R[8] * cz;
+      if (rx < cminx) cminx = rx; if (ry < cminy) cminy = ry; if (rz < cminz) cminz = rz;
+      if (rx > cmaxx) cmaxx = rx; if (ry > cmaxy) cmaxy = ry; if (rz > cmaxz) cmaxz = rz;
+    }
+    const tx = -(cminx + cmaxx) / 2, ty = -(cminy + cmaxy) / 2, tz = -zf;
+    // Apply to every slot (deleted ones too, so undo/frames stay consistent).
+    pushUndo(buffer);
+    const nb = buffer.slice();
+    const ndv = new DataView(nb.buffer);
+    const cov = [0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      const px = ndv.getFloat32(b, true), py = ndv.getFloat32(b + 4, true), pz = ndv.getFloat32(b + 8, true);
+      ndv.setFloat32(b, R[0] * px + R[1] * py + R[2] * pz + tx, true);
+      ndv.setFloat32(b + 4, R[3] * px + R[4] * py + R[5] * pz + ty, true);
+      ndv.setFloat32(b + 8, R[6] * px + R[7] * py + R[8] * pz + tz, true);
+      readCov6(ndv, b, cov); writeCov6(ndv, b, rotateCovariance(cov, R));
+    }
+    setBuffer(nb);
+    const nbounds = computeBounds(nb);
+    setBounds(nbounds);
+    // Re-aim the camera at the recentred scene.
+    const nc = center(nbounds), D = radius(nbounds) * 2.2 + 1;
+    camApiRef.current?.apply([nc[0] + D * 0.58, nc[1] - D * 0.58, nc[2] + D * 0.58], nc);
+    const tiltDeg = (Math.acos(dot) * 180) / Math.PI;
+    setStatus(`자동 수평: 기울기 ${tiltDeg.toFixed(1)}° 보정 · 바닥→z0 · 원점 정렬 (undo 가능)`);
   }
 
   // Scale the selection about its centroid, per axis (position + covariance).
@@ -1097,6 +1211,7 @@ export default function App() {
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{compares.length ? ` (${compares.length})` : ""}</button>
+          <button onClick={autoLevel} disabled={!buffer} title="RANSAC으로 바닥 평면을 찾아 씬을 z-up으로 정렬하고 원점으로 이동">⬒ 자동 수평 맞추기</button>
         </Dropdown>
         <button className={"menu-only" + (showCamPanel || autoOrbit || camRecording || camReplaying ? " active" : "")} onClick={() => setShowCamPanel((v) => !v)} disabled={!buffer}>카메라{autoOrbit || camRecording ? " ●" : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}

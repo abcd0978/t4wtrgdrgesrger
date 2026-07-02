@@ -15,6 +15,9 @@ export interface RenderSettings {
   clipAxis: number; // clipping plane axis: -1 off, 0/1/2 = X/Y/Z
   clipPos: number; // world coord of the clip plane along clipAxis
   clipSign: number; // which side to cut: +1 or -1
+  cropOn: number; // 1 = crop-box preview active (shader-side, non-destructive)
+  cropMin: [number, number, number]; // crop box corners (world coords)
+  cropMax: [number, number, number];
 }
 
 // Defaults match antimatter15/splat's (hardcoded) shader behaviour: no size
@@ -37,6 +40,9 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   clipAxis: -1,
   clipPos: 0,
   clipSign: 1,
+  cropOn: 0,
+  cropMin: [0, 0, 0],
+  cropMax: [0, 0, 0],
 };
 
 export const RenderSettingsContext = createContext<RenderSettings>(DEFAULT_SETTINGS);
