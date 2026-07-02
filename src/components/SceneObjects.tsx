@@ -106,12 +106,14 @@ export function CameraBridge({ apiRef }: { apiRef: React.MutableRefObject<Camera
   return null;
 }
 
-/** Two-point measure: a sphere at each picked point + a connecting line. */
+/** Polyline measure: a sphere at each picked point + connecting segments. */
 export function MeasureView({ points }: { points: [number, number, number][] }) {
   const lineGeo = React.useMemo(() => {
     if (points.length < 2) return null;
+    const pts: number[] = [];
+    for (let i = 1; i < points.length; i++) pts.push(...points[i - 1], ...points[i]);
     const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute([...points[0], ...points[1]], 3));
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
     return g;
   }, [points]);
   return (

@@ -10,7 +10,7 @@ export function SelectionPanel({
   rotStep, setRotStep, onRotate,
   onScaleUniform, onScaleAxis,
   editColor, setEditColor, editAlpha, setEditAlpha, onApplyColor,
-  onDuplicate, onHide, onIsolate, onDelete, onExportSel,
+  onDuplicate, onHide, onIsolate, onDelete, onKeepOnly, onExportSel,
 }: {
   selectionSize: number;
   onDeselect: () => void; onInvert: () => void; onGrow: () => void;
@@ -18,7 +18,7 @@ export function SelectionPanel({
   rotStep: number; setRotStep: (v: number) => void; onRotate: (axis: Axis, deg: number) => void;
   onScaleUniform: (f: number) => void; onScaleAxis: (sx: number, sy: number, sz: number) => void;
   editColor: string; setEditColor: (v: string) => void; editAlpha: number; setEditAlpha: (v: number) => void; onApplyColor: () => void;
-  onDuplicate: () => void; onHide: () => void; onIsolate: () => void; onDelete: () => void; onExportSel: () => void;
+  onDuplicate: () => void; onHide: () => void; onIsolate: () => void; onDelete: () => void; onKeepOnly: () => void; onExportSel: () => void;
 }) {
   return (
     <FloatingPanel title={`선택 ${selectionSize.toLocaleString()}개`} onClose={onDeselect} style={{ top: 62, left: 10 }} width="min(214px, calc(100vw - 20px))">
@@ -84,6 +84,7 @@ export function SelectionPanel({
           <button className="grow" onClick={onIsolate}>격리</button>
           <button className="grow danger" onClick={onDelete}>삭제</button>
         </div>
+        <button className="danger" onClick={onKeepOnly} title="선택하지 않은 가우시안을 전부 삭제 (undo 가능)">✂ 선택만 남기기</button>
         <button onClick={onExportSel}>선택만 .ply 내보내기</button>
     </FloatingPanel>
   );

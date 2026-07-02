@@ -90,6 +90,8 @@ export default function App() {
   const compareIdRef = React.useRef(1);
   const [showFilter, setShowFilter] = React.useState(false);
   const [showCrop, setShowCrop] = React.useState(false);
+  const [dragOver, setDragOver] = React.useState(false);
+  const dragDepth = React.useRef(0);
   const [filterColor, setFilterColor] = React.useState("#ffffff");
   const [filterTol, setFilterTol] = React.useState(60);
   const [filterAdd, setFilterAdd] = React.useState(false);
@@ -424,6 +426,23 @@ export default function App() {
     const n = selection.size;
     commitEdit((dv, b) => dv.setUint8(b + 31, 0), `deleted ${n} gaussians`);
     setSelection(new Set());
+  }
+
+  // Inverse crop: keep ONLY the selection, delete everything else (undoable).
+  function keepOnlySelection() {
+    if (!buffer || selection.size === 0) return;
+    pushUndo(buffer);
+    const nb = buffer.slice();
+    const dv = new DataView(nb.buffer);
+    const slots = nb.length / 8;
+    let n = 0;
+    for (let i = 0; i < slots; i++) {
+      if (selection.has(i)) continue;
+      const b = i * 32;
+      if (dv.getUint8(b + 31) !== 0) { dv.setUint8(b + 31, 0); n++; }
+    }
+    setBuffer(nb);
+    setStatus(`선택만 남김: ${n.toLocaleString()}개 삭제 (undo 가능)`);
   }
 
   function applyColorOpacity() {
@@ -825,10 +844,17 @@ export default function App() {
     setStatus(`recolored ${g.name}`);
   }
 
+  // Polyline measure: every pick appends a vertex; the panel shows the running
+  // total plus the last segment.
   function onMeasurePick(p: [number, number, number]) {
-    setMeasurePts((prev) => (prev.length >= 2 ? [p] : [...prev, p]));
+    setMeasurePts((prev) => [...prev, p]);
   }
-  const measureDist = measurePts.length === 2 ? dist3(measurePts[0], measurePts[1]) : null;
+  const measureTotal = measurePts.length >= 2
+    ? measurePts.slice(1).reduce((acc, p, i) => acc + dist3(measurePts[i], p), 0)
+    : null;
+  const measureLast = measurePts.length >= 2
+    ? dist3(measurePts[measurePts.length - 2], measurePts[measurePts.length - 1])
+    : null;
 
   function share() {
     const v = camApiRef.current?.get();
@@ -916,10 +942,12 @@ export default function App() {
   // Load a local .ply / .splat file into the viewer (no server needed). Clears
   // the view before the await so the camera refits to the new file; restores
   // the timeline when the file carries frame info.
-  async function onPlyFile(e: React.ChangeEvent<HTMLInputElement>) {
+  function onPlyFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file
-    if (!file) return;
+    if (file) loadLocalFile(file);
+  }
+  async function loadLocalFile(file: File) {
     setBusy(true); setStatus(`reading ${file.name}…`);
     setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
@@ -1278,7 +1306,26 @@ export default function App() {
   const rangeCount = frameCum ? frameCum[clipB] - (clipA > 0 ? frameCum[clipA - 1] : 0) : 0;
 
   return (
-    <div style={{ position: "fixed", inset: 0 }}>
+    <div
+      style={{ position: "fixed", inset: 0 }}
+      onDragEnter={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragDepth.current++;
+        setDragOver(true);
+      }}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
+      onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragOver(false); } }}
+      onDrop={(e) => {
+        e.preventDefault();
+        dragDepth.current = 0;
+        setDragOver(false);
+        const f = e.dataTransfer.files?.[0];
+        if (!f) return;
+        if (/\.(ply|splat)$/i.test(f.name)) loadLocalFile(f);
+        else setStatus("지원하지 않는 파일 — .ply / .splat만");
+      }}
+    >
       <div className={"panel toolbar" + (menuOpen ? "" : " collapsed")}>
         <button className="hamburger icon" onClick={() => setMenuOpen((o) => !o)} title="메뉴">{menuOpen ? "✕" : "☰"}</button>
         <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="(empty = this server)" className="grow menu-only" style={{ minWidth: 120 }} />
@@ -1360,14 +1407,24 @@ export default function App() {
           rotStep={rotStep} setRotStep={setRotStep} onRotate={rotateSelection}
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
           editColor={editColor} setEditColor={setEditColor} editAlpha={editAlpha} setEditAlpha={setEditAlpha} onApplyColor={applyColorOpacity}
-          onDuplicate={duplicateSelection} onHide={hideSelection} onIsolate={isolateSelection} onDelete={deleteSelection} onExportSel={exportSelectionPly}
+          onDuplicate={duplicateSelection} onHide={hideSelection} onIsolate={isolateSelection} onDelete={deleteSelection} onKeepOnly={keepOnlySelection} onExportSel={exportSelectionPly}
         />
       )}
 
       {measureMode && (
-        <FloatingPanel title="📏 측정" onClose={() => { setMeasureMode(false); setMeasurePts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(360px, calc(100vw - 20px))">
-          <span className="muted">가우시안 두 점을 더블클릭 ({measurePts.length}/2)</span>
-          {measureDist != null && <span className="num" style={{ fontSize: 17, color: "var(--accent-2)" }}>거리: {measureDist.toFixed(3)}</span>}
+        <FloatingPanel title="📏 측정 (다점)" onClose={() => { setMeasureMode(false); setMeasurePts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(360px, calc(100vw - 20px))">
+          <span className="muted">가우시안을 더블클릭해 점을 이어가세요 ({measurePts.length}점)</span>
+          {measureTotal != null && (
+            <span className="num" style={{ fontSize: 17, color: "var(--accent-2)" }}>
+              총 길이: {measureTotal.toFixed(3)}{measurePts.length > 2 && measureLast != null ? ` (마지막 구간 ${measureLast.toFixed(3)})` : ""}
+            </span>
+          )}
+          {measurePts.length > 0 && (
+            <div className="row" style={{ gap: 6 }}>
+              <button className="grow" onClick={() => setMeasurePts((p) => p.slice(0, -1))}>↩ 마지막 점 취소</button>
+              <button className="grow ghost" onClick={() => setMeasurePts([])}>지우기</button>
+            </div>
+          )}
         </FloatingPanel>
       )}
 
@@ -1564,6 +1621,17 @@ export default function App() {
           width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0),
           border: "1.5px solid var(--accent)", background: "rgba(255,139,61,0.15)", borderRadius: 4,
         }} />
+      )}
+
+      {dragOver && (
+        <div style={{
+          position: "absolute", inset: 10, zIndex: 9, pointerEvents: "none",
+          border: "2px dashed var(--accent)", borderRadius: 10, background: "rgba(255,139,61,0.10)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 20, fontWeight: 700, color: "var(--accent)",
+        }}>
+          .ply / .splat 파일을 여기에 놓기
+        </div>
       )}
 
       {emptyState && (
