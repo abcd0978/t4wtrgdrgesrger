@@ -638,6 +638,9 @@ function SplatRendererImpl() {
     uniforms.clipAxis.value = settings.clipAxis;
     uniforms.clipPos.value = settings.clipPos;
     uniforms.clipSign.value = settings.clipSign;
+    uniforms.cropEnable.value = settings.cropOn;
+    (uniforms.cropMin.value as THREE.Vector3).fromArray(settings.cropMin);
+    (uniforms.cropMax.value as THREE.Vector3).fromArray(settings.cropMax);
     uniforms.transitionInState.value = Math.min(
       uniforms.transitionInState.value + delta * settings.fadeSpeed,
       1.0,

@@ -89,6 +89,7 @@ export default function App() {
   const [compares, setCompares] = React.useState<CompareItem[]>([]);
   const compareIdRef = React.useRef(1);
   const [showFilter, setShowFilter] = React.useState(false);
+  const [showCrop, setShowCrop] = React.useState(false);
   const [filterColor, setFilterColor] = React.useState("#ffffff");
   const [filterTol, setFilterTol] = React.useState(60);
   const [filterAdd, setFilterAdd] = React.useState(false);
@@ -571,6 +572,99 @@ export default function App() {
     camApiRef.current?.apply([nc[0] + D * 0.58, nc[1] - D * 0.58, nc[2] + D * 0.58], nc);
     const tiltDeg = (Math.acos(dot) * 180) / Math.PI;
     setStatus(`자동 수평: 기울기 ${tiltDeg.toFixed(1)}° 보정 · 바닥→z0 · 원점 정렬 (undo 가능)`);
+  }
+
+  // --- crop box: shader-side preview (hide outside), then apply = delete ---
+  function openCrop() {
+    if (!bounds) return;
+    setSettings((s) => ({
+      ...s, cropOn: 1,
+      cropMin: [bounds.min[0], bounds.min[1], bounds.min[2]],
+      cropMax: [bounds.max[0], bounds.max[1], bounds.max[2]],
+    }));
+    setShowCrop(true);
+  }
+  function closeCrop() {
+    setShowCrop(false);
+    setSettings((s) => ({ ...s, cropOn: 0 }));
+  }
+  function setCropVal(which: "cropMin" | "cropMax", axis: number, v: number) {
+    setSettings((s) => {
+      const arr = [...s[which]] as [number, number, number];
+      arr[axis] = v;
+      return { ...s, [which]: arr };
+    });
+  }
+  // Bake the crop: alpha-0 everything outside the box (same delete sentinel as
+  // the other edit tools, so it exports/undoes consistently).
+  function cropDeleteOutside() {
+    if (!buffer) return;
+    const mn = settings.cropMin, mx = settings.cropMax;
+    pushUndo(buffer);
+    const nb = buffer.slice();
+    const ndv = new DataView(nb.buffer);
+    const slots = nb.length / 8;
+    let n = 0;
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      if (ndv.getUint8(b + 31) === 0) continue;
+      const x = ndv.getFloat32(b, true), y = ndv.getFloat32(b + 4, true), z = ndv.getFloat32(b + 8, true);
+      if (x < mn[0] || x > mx[0] || y < mn[1] || y > mx[1] || z < mn[2] || z > mx[2]) {
+        ndv.setUint8(b + 31, 0);
+        n++;
+      }
+    }
+    setBuffer(nb);
+    closeCrop();
+    setStatus(`크롭: 박스 밖 ${n.toLocaleString()}개 삭제 (undo 가능)`);
+  }
+
+  // Remove "floaters": gaussians with (almost) no neighbours, via a coarse
+  // spatial hash grid. Fast path: a point in an already-dense cell is kept
+  // immediately; only sparse-cell points pay for the 27-cell neighbourhood sum.
+  function cleanFloaters() {
+    if (!buffer || !bounds) return;
+    const dv = viewOf(buffer);
+    const slots = buffer.length / 8;
+    const cell = Math.max(radius(bounds) / 50, 1e-9);
+    const key = (ix: number, iy: number, iz: number) =>
+      ((ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791)) >>> 0;
+    const counts = new Map<number, number>();
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      const k = key(
+        Math.floor(dv.getFloat32(b, true) / cell),
+        Math.floor(dv.getFloat32(b + 4, true) / cell),
+        Math.floor(dv.getFloat32(b + 8, true) / cell),
+      );
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    const MIN_N = 5; // neighbours (incl. self) below this = floater
+    const del: number[] = [];
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      const ix = Math.floor(dv.getFloat32(b, true) / cell);
+      const iy = Math.floor(dv.getFloat32(b + 4, true) / cell);
+      const iz = Math.floor(dv.getFloat32(b + 8, true) / cell);
+      if ((counts.get(key(ix, iy, iz)) ?? 0) > MIN_N) continue;
+      let nb = 0;
+      outer: for (let dx = -1; dx <= 1; dx++)
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dz = -1; dz <= 1; dz++) {
+            nb += counts.get(key(ix + dx, iy + dy, iz + dz)) ?? 0;
+            if (nb > MIN_N) break outer;
+          }
+      if (nb <= MIN_N) del.push(i);
+    }
+    if (del.length === 0) { setStatus("플로터 없음 (기준: 주변 이웃 ≤ 5)"); return; }
+    pushUndo(buffer);
+    const nb2 = buffer.slice();
+    const ndv = new DataView(nb2.buffer);
+    for (const i of del) ndv.setUint8(i * 32 + 31, 0);
+    setBuffer(nb2);
+    setStatus(`🧹 플로터 ${del.length.toLocaleString()}개 삭제 (undo 가능)`);
   }
 
   // Scale the selection about its centroid, per axis (position + covariance).
@@ -1212,6 +1306,8 @@ export default function App() {
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{compares.length ? ` (${compares.length})` : ""}</button>
           <button onClick={autoLevel} disabled={!buffer} title="RANSAC으로 바닥 평면을 찾아 씬을 z-up으로 정렬하고 원점으로 이동">⬒ 자동 수평 맞추기</button>
+          <button className={showCrop ? "active" : ""} onClick={() => (showCrop ? closeCrop() : openCrop())} disabled={!buffer} title="박스 밖을 미리보기로 숨기고, 확정 시 삭제">✂ 크롭 박스</button>
+          <button onClick={cleanFloaters} disabled={!buffer} title="주변에 이웃이 거의 없는 떠다니는 노이즈 가우시안을 한 번에 삭제">🧹 플로터 정리</button>
         </Dropdown>
         <button className={"menu-only" + (showCamPanel || autoOrbit || camRecording || camReplaying ? " active" : "")} onClick={() => setShowCamPanel((v) => !v)} disabled={!buffer}>카메라{autoOrbit || camRecording ? " ●" : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
@@ -1307,6 +1403,34 @@ export default function App() {
               </div>
             </>
           )}
+        </FloatingPanel>
+      )}
+
+      {showCrop && bounds && (
+        <FloatingPanel title="✂ 크롭 박스" onClose={closeCrop} style={{ top: 62, right: 8 }} width="min(320px, calc(100vw - 20px))">
+          <span className="muted" style={{ fontSize: 12 }}>박스 밖은 실시간으로 숨겨짐 · "밖 삭제"로 확정 (undo 가능)</span>
+          {[0, 1, 2].map((ax) => {
+            const lo = bounds.min[ax], hi = bounds.max[ax];
+            const step = Math.max((hi - lo) / 200, 1e-4);
+            return (
+              <div key={ax} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <span className="muted">{"XYZ"[ax]}</span>
+                  <span className="num muted" style={{ fontSize: 11 }}>{settings.cropMin[ax].toFixed(2)} ~ {settings.cropMax[ax].toFixed(2)}</span>
+                </div>
+                <div className="row" style={{ gap: 6 }}>
+                  <input type="range" className="grow" min={lo} max={hi} step={step} value={settings.cropMin[ax]}
+                    onChange={(e) => setCropVal("cropMin", ax, Math.min(parseFloat(e.target.value), settings.cropMax[ax]))} />
+                  <input type="range" className="grow" min={lo} max={hi} step={step} value={settings.cropMax[ax]}
+                    onChange={(e) => setCropVal("cropMax", ax, Math.max(parseFloat(e.target.value), settings.cropMin[ax]))} />
+                </div>
+              </div>
+            );
+          })}
+          <div className="row" style={{ gap: 6 }}>
+            <button className="grow danger" onClick={cropDeleteOutside}>✂ 박스 밖 삭제</button>
+            <button className="grow" onClick={openCrop} title="박스를 씬 전체로 되돌림">초기화</button>
+          </div>
         </FloatingPanel>
       )}
 

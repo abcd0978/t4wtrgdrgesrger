@@ -34,6 +34,9 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     clipAxis: -1.0,
     clipPos: 0.0,
     clipSign: 1.0,
+    cropEnable: 0.0,
+    cropMin: /* @__PURE__ */ new THREE.Vector3(),
+    cropMax: /* @__PURE__ */ new THREE.Vector3(),
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
   // highp float is critical on mobile: Apple GPUs really evaluate mediump as
@@ -74,6 +77,11 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
   uniform float clipAxis;
   uniform float clipPos;
   uniform float clipSign;
+
+  // Crop box preview (world-coord AABB): cropEnable 0 = off.
+  uniform float cropEnable;
+  uniform vec3 cropMin;
+  uniform vec3 cropMax;
 
   out vec4 vRgba;
   out vec2 vPosition;
@@ -119,6 +127,12 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
       float coord = clipAxis < 0.5 ? center.x : (clipAxis < 1.5 ? center.y : center.z);
       if ((coord - clipPos) * clipSign > 0.0) return;
     }
+
+    // Crop box: hide gaussians outside (non-destructive preview; the UI
+    // applies it for real by zeroing alphas).
+    if (cropEnable > 0.5 &&
+        (any(lessThan(center, cropMin)) || any(greaterThan(center, cropMax))))
+      return;
 
     vec4 c_cam = T_camera_group * vec4(center, 1);
     if (-c_cam.z < near || -c_cam.z > far)
