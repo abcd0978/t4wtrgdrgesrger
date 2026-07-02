@@ -26,6 +26,8 @@ export interface SceneOpts {
   showGrid: boolean; setShowGrid: (v: boolean) => void;
   grid: GridOpts; setGrid: React.Dispatch<React.SetStateAction<GridOpts>>;
   dpr: number; setDpr: (v: number) => void;
+  dprAuto: boolean; setDprAuto: (v: boolean) => void;
+  effDpr: number; // what the canvas actually uses (auto-resolved or manual)
   showAxes: boolean; setShowAxes: (v: boolean) => void;
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
@@ -43,7 +45,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
   const disabledLayer = { display: "flex", gap: 6, alignItems: "center", opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -85,7 +87,7 @@ export function SettingsPanel({
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ width: 84 }}>grid 색</span><input type="color" value={grid.color} onChange={(e) => setGrid((g) => ({ ...g, color: e.target.value }))} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>grid div</span><input type="range" min={2} max={60} step={1} value={grid.divisions} onChange={(e) => setGrid((g) => ({ ...g, divisions: parseInt(e.target.value) }))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{grid.divisions}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
-      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>DPR</span><input type="range" min={0.5} max={3} step={0.25} value={dpr} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{dpr}</span></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }} title="자동: 50만 스플랫 초과 시 1.0, 이하는 기기 해상도"><span style={{ width: 84 }}>DPR</span><input type="checkbox" checked={dprAuto} onChange={(e) => setDprAuto(e.target.checked)} /><span style={{ fontSize: 11 }}>자동</span><input type="range" min={0.5} max={3} step={0.25} value={dprAuto ? effDpr : dpr} disabled={dprAuto} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1, opacity: dprAuto ? 0.45 : 1 }} /><span style={{ width: 46, textAlign: "right" }}>{Math.round(effDpr * 100) / 100}</span></label>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
 
       <b>클리핑 (단면)</b>

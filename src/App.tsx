@@ -101,10 +101,12 @@ export default function App() {
   const [showMap, setShowMap] = React.useState(true);
   const [showGrid, setShowGrid] = React.useState(true);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
-  // Splatting is fill-rate bound (translucent quad overdraw); dpr 1 renders
-  // ~55% fewer pixels than 1.5. Raise it in the settings panel if you want
-  // sharper output on hi-dpi displays.
-  const [dpr, setDpr] = React.useState(1);
+  // Splatting is fill-rate bound (translucent quad overdraw), so resolution is
+  // the main quality/perf lever. Default is auto (antimatter15-style dynamic
+  // resolution): scenes over 500k splats render at dpr 1, lighter ones at
+  // native devicePixelRatio sharpness. Uncheck 자동 in settings to pin a value.
+  const [dprAuto, setDprAuto] = React.useState(true);
+  const [dpr, setDpr] = React.useState(1.5); // manual value when auto is off
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -906,6 +908,17 @@ export default function App() {
     return out;
   }, [display, renderFrac]);
 
+  // Effective canvas DPR: what's actually drawn (main scene after LOD + visible
+  // compare overlays) decides whether we're in the heavy regime.
+  const renderedSplats = React.useMemo(() => {
+    let n = lod ? lod.length / 8 : 0;
+    for (const c of compares) if (c.visible) n += c.buffer.length / 8;
+    return n;
+  }, [lod, compares]);
+  const effDpr = dprAuto
+    ? (renderedSplats > 500_000 ? 1 : Math.min(window.devicePixelRatio || 1, 2))
+    : dpr;
+
   // Move the camera to look at the data centre from `dir` (centre -> camera).
   function setView(dir: [number, number, number]) {
     if (!bounds || !camApiRef.current) return;
@@ -1004,15 +1017,17 @@ export default function App() {
     turntableTimer.current = window.setTimeout(() => { setAutoOrbit(false); videoRecRef.current?.stop(); }, durMs);
   }
 
-  // High-res screenshot: briefly bump DPR, let it render, capture, restore.
+  // High-res screenshot: briefly pin DPR above the current effective value,
+  // let it render, capture, then restore (including auto mode).
   function captureHiRes(scale: number) {
     if (!buffer) return;
-    const prev = dpr;
-    setDpr(Math.min(prev * scale, 8));
+    const prevAuto = dprAuto, prevDpr = dpr;
+    setDprAuto(false);
+    setDpr(Math.min(effDpr * scale, 8));
     setStatus(`${scale}× 스크린샷 렌더링…`);
     window.setTimeout(() => {
       captureRef.current?.(`${runId || "viser"}_${scale}x.png`);
-      setDpr(prev);
+      setDpr(prevDpr); setDprAuto(prevAuto);
       setStatus(`${scale}× 스크린샷 저장됨`);
     }, 200);
   }
@@ -1088,7 +1103,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1303,7 +1318,7 @@ export default function App() {
           costs fill-rate. preserveDrawingBuffer off: skips the per-frame
           backbuffer copy; CanvasCapture re-renders right before reading pixels
           instead, and captureStream (video export) grabs frames as they draw. */}
-      <Canvas dpr={dpr} gl={{ antialias: false, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+      <Canvas dpr={effDpr} gl={{ antialias: false, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}
