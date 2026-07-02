@@ -31,6 +31,26 @@ function Sect({ children }: { children: React.ReactNode }) {
   return <b style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.12)" }}>{children}</b>;
 }
 
+/** Curated quality presets orchestrating every performance knob. Discrete
+ * levels (not a continuous slider) because the knobs are heterogeneous —
+ * booleans, nonlinear thresholds, quantized strides — so only tested
+ * combinations are meaningful. Individual sliders below still override;
+ * the matching preset is detected from the current values. */
+type Preset = {
+  name: string;
+  // RenderSettings fields
+  s: { lodDist: number; sortThreshold: number; cullThreshold: number; alphaTest: number; minSplatPx: number };
+  // scene-level fields
+  dprAuto: boolean; dpr: number; minFps: number; renderFrac: number;
+};
+const PRESETS: Preset[] = [
+  { name: "매우낮음", s: { lodDist: 0.5, sortThreshold: 0.03, cullThreshold: 0.02, alphaTest: 0.02, minSplatPx: 2 }, dprAuto: false, dpr: 0.75, minFps: 30, renderFrac: 0.35 },
+  { name: "낮음", s: { lodDist: 0.75, sortThreshold: 0.02, cullThreshold: 0.01, alphaTest: 0.01, minSplatPx: 1 }, dprAuto: false, dpr: 1, minFps: 30, renderFrac: 0.6 },
+  { name: "중간", s: { lodDist: 1, sortThreshold: 0.015, cullThreshold: 0.005, alphaTest: 0.005, minSplatPx: 0.5 }, dprAuto: true, dpr: 1, minFps: 25, renderFrac: 1 },
+  { name: "높음", s: { lodDist: 0, sortThreshold: 0.01, cullThreshold: 0, alphaTest: 0, minSplatPx: 0 }, dprAuto: true, dpr: 1.5, minFps: 15, renderFrac: 1 },
+  { name: "최고", s: { lodDist: 0, sortThreshold: 0, cullThreshold: 0, alphaTest: 0, minSplatPx: 0 }, dprAuto: true, dpr: 1.5, minFps: 5, renderFrac: 1 },
+];
+
 export interface SceneOpts {
   bg: string; setBg: (v: string) => void;
   showMap: boolean; setShowMap: (v: boolean) => void;
@@ -82,7 +102,31 @@ export function SettingsPanel({
         <button className="ghost icon" onClick={onClose} onPointerDown={(e) => e.stopPropagation()} title="닫기">✕</button>
       </div>
 
-      <b>성능 · 품질</b>
+      <b>품질 프리셋</b>
+      <div style={{ display: "flex", gap: 4 }}>
+        {PRESETS.map((p) => {
+          const active =
+            settings.lodDist === p.s.lodDist && settings.sortThreshold === p.s.sortThreshold &&
+            settings.cullThreshold === p.s.cullThreshold && settings.alphaTest === p.s.alphaTest &&
+            settings.minSplatPx === p.s.minSplatPx && dprAuto === p.dprAuto &&
+            (p.dprAuto ? minFps === p.minFps : dpr === p.dpr) && renderFrac === p.renderFrac;
+          return (
+            <button key={p.name} className={active ? "active" : ""} style={{ flex: 1, padding: "6px 2px", fontSize: 12 }}
+              onClick={() => {
+                setSettings((s) => ({ ...s, ...p.s }));
+                setDprAuto(p.dprAuto);
+                setDpr(p.dpr);
+                setMinFps(p.minFps);
+                setRenderFrac(p.renderFrac);
+              }}>
+              {p.name}
+            </button>
+          );
+        })}
+      </div>
+      <span style={{ fontSize: 11, opacity: 0.6 }}>프리셋 적용 후 아래 슬라이더로 세부 조정 가능 (수정하면 프리셋 표시 해제)</span>
+
+      <Sect>성능 · 품질</Sect>
       <label style={row} title="자동: 기기 해상도로 렌더하다가 fps가 낮아지면 단계적으로 낮추고, 여유가 생기면 되돌림">
         <span style={{ width: 84 }}>해상도(DPR)</span>
         <input type="checkbox" checked={dprAuto} onChange={(e) => setDprAuto(e.target.checked)} /><span style={{ fontSize: 11 }}>자동</span>
