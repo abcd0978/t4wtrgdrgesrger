@@ -648,58 +648,92 @@ export function RotateHandle({
   );
 }
 
-/** Keep the felt control speeds constant everywhere, driven by exactly two
- * user knobs — 회전 감도 and 확대 감도 — that apply to mouse AND touch.
- * - rotate: no proximity-based slowdown; on touch a fixed internal factor
- *   attenuates the same knob (finger drags cover much more of a small screen).
- * - zoom: compensates OrbitControls' distance-proportional dolly step
- *   (∝ 1/dist, clamped; lower cap on touch since pinch applies zoomSpeed
- *   exponentially), then scales by the zoom knob. */
+/** Constant rotate speed everywhere, from the single 회전 감도 knob. Touch
+ * gets a fixed internal attenuation (finger drags cover much more of a small
+ * screen than mouse drags). Zoom is handled by GestureControls (fly-forward),
+ * so OrbitControls' own dolly is disabled. */
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 const TOUCH_ROTATE_FACTOR = 0.05;
 
-export function ConstantControlSpeed({ sceneRadius, rotateSens = 1, zoomSens = 1 }: { sceneRadius: number; rotateSens?: number; zoomSens?: number }) {
-  const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
+export function ConstantControlSpeed({ rotateSens = 1 }: { rotateSens?: number }) {
+  const controls = useThree((s) => s.controls) as { rotateSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
     controls.rotateSpeed = rotateSens * (IS_COARSE_POINTER ? TOUCH_ROTATE_FACTOR : 1);
-    const dist = camera.position.distanceTo(controls.target);
-    const boost = (sceneRadius || 1) / Math.max(dist, 1e-6);
-    controls.zoomSpeed = zoomSens * Math.min(IS_COARSE_POINTER ? 1.5 : 30, Math.max(1, boost));
   });
   return null;
 }
 
-/** Two-finger twist gesture: rotating two touching fingers spins the camera's
- * azimuth (turntable around the world-up axis through the orbit target) by the
- * twist angle, map-app style — the scene follows the fingers. Runs alongside
- * OrbitControls' own two-finger dolly/pan, so pinch+twist combine naturally. */
-export function TouchTwistRotate() {
+/** Wheel + touch gestures, all "fly" style:
+ * - Wheel / two-finger pinch = move FORWARD/BACK along the view direction —
+ *   camera and orbit target translate together (exactly like WASD), so zoom
+ *   never stalls at the orbit target and can pass through the scene.
+ * - Two-finger twist = spin the camera's azimuth (turntable around world-up
+ *   through the target) by the twist angle, map-app style.
+ * OrbitControls' own dolly is disabled (enableZoom=false); its two-finger pan
+ * still composes with these. */
+export function GestureControls({ sceneRadius, zoomSens = 1 }: { sceneRadius: number; zoomSens?: number }) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
-  const ref = React.useRef({ camera, controls });
-  ref.current = { camera, controls };
+  const ref = React.useRef({ camera, controls, sceneRadius, zoomSens });
+  ref.current = { camera, controls, sceneRadius, zoomSens };
 
   React.useEffect(() => {
     const el = gl.domElement;
+    const fwd = new THREE.Vector3();
+
+    // Translate camera + target along the view direction by `move` world units.
+    const flyForward = (move: number) => {
+      const { camera: cam, controls: ctl } = ref.current;
+      if (!ctl || move === 0) return;
+      cam.getWorldDirection(fwd).multiplyScalar(move);
+      cam.position.add(fwd);
+      ctl.target.add(fwd);
+      ctl.update();
+    };
+
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { sceneRadius: r, zoomSens: zs } = ref.current;
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY; // lines -> px-ish
+      flyForward(-dy * 0.0008 * (r || 1) * zs); // ~8% of scene radius per notch
+    };
+
     const touches = new Map<number, { x: number; y: number }>();
     let prevAngle: number | null = null;
+    let prevDist: number | null = null;
     const angleOf = () => {
       const [a, b] = [...touches.values()];
       return Math.atan2(b.y - a.y, b.x - a.x);
     };
+    const distOf = () => {
+      const [a, b] = [...touches.values()];
+      return Math.hypot(b.x - a.x, b.y - a.y);
+    };
+    const resetPair = () => {
+      const two = touches.size === 2;
+      prevAngle = two ? angleOf() : null;
+      prevDist = two ? distOf() : null;
+    };
     const down = (e: PointerEvent) => {
       if (e.pointerType !== "touch") return;
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      prevAngle = touches.size === 2 ? angleOf() : null;
+      resetPair();
     };
     const move = (e: PointerEvent) => {
       if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size !== 2) return;
+      // Pinch = fly forward/back (spread fingers to move in).
+      const dist = distOf();
+      if (prevDist !== null) {
+        const { sceneRadius: r, zoomSens: zs } = ref.current;
+        flyForward((dist - prevDist) * 0.0025 * (r || 1) * zs);
+      }
+      prevDist = dist;
+      // Twist = azimuth turntable.
       const a = angleOf();
       if (prevAngle !== null) {
         let d = a - prevAngle;
@@ -707,8 +741,6 @@ export function TouchTwistRotate() {
         else if (d < -Math.PI) d += 2 * Math.PI;
         const { camera: cam, controls: ctl } = ref.current;
         if (ctl && d !== 0) {
-          // Screen y grows downward, so the visual twist is -d; rotate the
-          // camera around world-up so the scene appears to follow the fingers.
           const c = Math.cos(d), s = Math.sin(d);
           const t = ctl.target;
           const vx = cam.position.x - t.x, vy = cam.position.y - t.y;
@@ -722,13 +754,15 @@ export function TouchTwistRotate() {
     const up = (e: PointerEvent) => {
       if (e.pointerType !== "touch") return;
       touches.delete(e.pointerId);
-      prevAngle = touches.size === 2 ? angleOf() : null;
+      resetPair();
     };
+    el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("pointerdown", down);
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
     return () => {
+      el.removeEventListener("wheel", wheel);
       el.removeEventListener("pointerdown", down);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
