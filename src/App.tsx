@@ -8,7 +8,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, FpsMeter, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked } from "./lib/splatFile";
@@ -105,10 +105,13 @@ export default function App() {
   const [showGrid, setShowGrid] = React.useState(false);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
   // Splatting is fill-rate bound (translucent quad overdraw), so resolution is
-  // the main quality/perf lever. Default is auto (antimatter15-style dynamic
-  // resolution): scenes over 500k splats render at dpr 1, lighter ones at
-  // native devicePixelRatio sharpness. Uncheck 자동 in settings to pin a value.
+  // the main quality/perf lever. Quality first: auto mode renders at native
+  // devicePixelRatio and AdaptiveDpr steps it down only when measured fps
+  // can't keep up (and back up when there's headroom). Uncheck 자동 in
+  // settings to pin a value manually.
+  const nativeDpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
   const [dprAuto, setDprAuto] = React.useState(true);
+  const [autoDprValue, setAutoDprValue] = React.useState(nativeDpr);
   const [dpr, setDpr] = React.useState(1.5); // manual value when auto is off
   const [antialias, setAntialias] = React.useState(false);
   const [showAxes, setShowAxes] = React.useState(false);
@@ -914,16 +917,7 @@ export default function App() {
     return out;
   }, [display, renderFrac]);
 
-  // Effective canvas DPR: what's actually drawn (main scene after LOD + visible
-  // compare overlays) decides whether we're in the heavy regime.
-  const renderedSplats = React.useMemo(() => {
-    let n = lod ? lod.length / 8 : 0;
-    for (const c of compares) if (c.visible) n += c.buffer.length / 8;
-    return n;
-  }, [lod, compares]);
-  const effDpr = dprAuto
-    ? (renderedSplats > 500_000 ? 1 : Math.min(window.devicePixelRatio || 1, 2))
-    : dpr;
+  const effDpr = dprAuto ? autoDprValue : dpr;
 
   // Move the camera to look at the data centre from `dir` (centre -> camera).
   function setView(dir: [number, number, number]) {
@@ -1343,6 +1337,7 @@ export default function App() {
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} canvasRef={canvasRef} download={downloadBlob} />
         <FpsMeter elRef={fpsElRef} />
+        <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} />
         <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}

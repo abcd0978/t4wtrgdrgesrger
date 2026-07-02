@@ -284,6 +284,41 @@ export function CanvasCapture({
   return null;
 }
 
+/** Quality-first adaptive resolution: render at native DPR and step down only
+ * when measured fps can't keep up. Down fast (any bad 1s window), up slow
+ * (3 consecutive good windows + cooldown) so it doesn't oscillate. */
+export function AdaptiveDpr({ enabled, value, setValue, max }: {
+  enabled: boolean; value: number; setValue: (v: number) => void; max: number;
+}) {
+  const acc = React.useRef({ frames: 0, t0: 0, lastChange: 0, goodWindows: 0 });
+  useFrame(() => {
+    if (!enabled) return;
+    const a = acc.current;
+    const now = performance.now();
+    if (a.t0 === 0) { a.t0 = now; return; }
+    a.frames++;
+    const dt = now - a.t0;
+    if (dt < 1000) return;
+    const fps = (a.frames * 1000) / dt;
+    a.t0 = now; a.frames = 0;
+    if (dt > 2000 || document.hidden) return; // rAF was throttled (background tab)
+    const cooldown = now - a.lastChange < 3000;
+    if (fps < 48 && value > 0.75 && !cooldown) {
+      a.lastChange = now; a.goodWindows = 0;
+      setValue(Math.max(0.75, Math.round((value - 0.25) * 4) / 4));
+    } else if (fps > 57 && value < max) {
+      a.goodWindows++;
+      if (a.goodWindows >= 3 && !cooldown) {
+        a.lastChange = now; a.goodWindows = 0;
+        setValue(Math.min(max, value + 0.25));
+      }
+    } else {
+      a.goodWindows = 0;
+    }
+  });
+  return null;
+}
+
 /** Live fps / frame-time readout. Counts real rendered frames via useFrame and
  * writes into `elRef` twice a second — no React state, so the meter itself adds
  * zero per-frame overhead. */
