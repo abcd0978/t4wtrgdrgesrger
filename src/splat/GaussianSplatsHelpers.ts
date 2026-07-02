@@ -36,7 +36,10 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     clipSign: 1.0,
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
-  precision mediump float;
+  // highp float is critical on mobile: Apple GPUs really evaluate mediump as
+  // fp16 (desktop promotes to fp32), which wrecks position/covariance math —
+  // splats warp and surfaces turn see-through. antimatter15 uses highp too.
+  precision highp float;
 
   // Index from the splat sorter.
   attribute uint sortedIndex;
@@ -198,7 +201,7 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     #endif
   }
 `,
-  `precision mediump float;
+  `precision highp float; // fp16 exp() banding is visible on mobile; keep highp
 
   uniform vec2 viewport;
   uniform float falloffCutoff;
