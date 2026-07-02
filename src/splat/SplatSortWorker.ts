@@ -9,6 +9,7 @@ export type SorterWorkerIncoming =
   | {
       setBuffer: Uint32Array;
       setGroupIndices: Uint32Array;
+      forceJsSort?: boolean; // diagnostic: skip WASM (?jssort URL flag)
     }
   | {
       updateBuffer: Uint32Array;
@@ -23,6 +24,60 @@ export type SorterWorkerIncoming =
       recycleBuffer: Uint32Array;
     }
   | { close: true };
+
+/** Pure-JS fallback with the same interface as the WASM Sorter: a 16-bit
+ * counting sort over camera-space Z, ascending (farthest first — identical
+ * ordering to sorter.cpp). The WASM module is built with -msimd128, which
+ * iOS Safari < 16.4 (and some older browsers) cannot instantiate; without a
+ * fallback those devices never sort and render an x-ray mess. ~2-3x slower
+ * than WASM but the same big-O; antimatter15 sorts in plain JS too. */
+class JsSorter {
+  private f32!: Float32Array;
+  private groups!: Uint32Array;
+  private n = 0;
+  private depths!: Float32Array;
+  private bins!: Uint32Array;
+  private out!: Uint32Array;
+  private counts = new Uint32Array(65536);
+  private starts = new Uint32Array(65536);
+  constructor(buffer: Uint32Array, groupIndices: Uint32Array) {
+    this.setBuffer(buffer, groupIndices);
+  }
+  setBuffer(buffer: Uint32Array, groupIndices: Uint32Array) {
+    this.f32 = new Float32Array(buffer.buffer, buffer.byteOffset, buffer.length);
+    this.groups = groupIndices;
+    const n = buffer.length / 8;
+    if (n !== this.n) {
+      this.n = n;
+      this.depths = new Float32Array(n);
+      this.bins = new Uint32Array(n);
+      this.out = new Uint32Array(n);
+    }
+  }
+  sort(Tz: Float32Array): Uint32Array {
+    const { f32, groups, n, depths, bins, out, counts, starts } = this;
+    let mn = Infinity, mx = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const b = i * 8, g = groups[i] * 4;
+      const z = Tz[g] * f32[b] + Tz[g + 1] * f32[b + 1] + Tz[g + 2] * f32[b + 2] + Tz[g + 3];
+      depths[i] = z;
+      if (z < mn) mn = z;
+      if (z > mx) mx = z;
+    }
+    counts.fill(0);
+    const inv = 65535 / (mx - mn + 1e-9);
+    for (let i = 0; i < n; i++) {
+      const bin = ((depths[i] - mn) * inv) | 0;
+      bins[i] = bin;
+      counts[bin]++;
+    }
+    starts[0] = 0;
+    for (let i = 1; i < 65536; i++) starts[i] = starts[i - 1] + counts[i - 1];
+    for (let i = 0; i < n; i++) out[starts[bins[i]]++] = i;
+    return out;
+  }
+  delete() { /* interface parity with the embind object */ }
+}
 
 {
   let sorter: any = null;
@@ -76,11 +131,21 @@ export type SorterWorkerIncoming =
   self.onmessage = async (e) => {
     const data = e.data as SorterWorkerIncoming;
     if ("setBuffer" in data) {
-      // Instantiate sorter with buffers populated.
-      sorter = new (await SorterModulePromise).Sorter(
-        data.setBuffer,
-        data.setGroupIndices,
-      );
+      // Instantiate sorter with buffers populated; fall back to the JS
+      // implementation when the SIMD WASM module can't load on this device.
+      if (data.forceJsSort) {
+        sorter = new JsSorter(data.setBuffer, data.setGroupIndices);
+      } else {
+        try {
+          sorter = new (await SorterModulePromise).Sorter(
+            data.setBuffer,
+            data.setGroupIndices,
+          );
+        } catch (err) {
+          console.warn("[splat] WASM sorter unavailable; using JS fallback:", err);
+          sorter = new JsSorter(data.setBuffer, data.setGroupIndices);
+        }
+      }
     } else if ("updateBuffer" in data) {
       // Update existing sorter with new buffer data.
       if (sorter !== null) {

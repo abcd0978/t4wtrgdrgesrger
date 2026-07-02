@@ -31,6 +31,11 @@ const SorterModulePromise = fetch(SorterWasmUrl)
   .then((response) => response.arrayBuffer())
   .then((wasmBinary) => MakeSorterModuleFactory({ wasmBinary }));
 
+// Diagnostic escape hatch: append ?jssort to the URL to force the worker's
+// pure-JS sorter (bypasses the SIMD WASM module entirely).
+const FORCE_JS_SORT =
+  typeof location !== "undefined" && /[?&]jssort\b/.test(location.search);
+
 import React from "react";
 import * as THREE from "three";
 import SplatSortWorker from "./SplatSortWorker?worker&inline";
@@ -243,6 +248,7 @@ function SplatRendererImpl() {
     postToWorker({
       setBuffer: merged.gaussianBuffer,
       setGroupIndices: merged.groupIndices,
+      forceJsSort: FORCE_JS_SORT,
     });
 
     prevMergedRef.current = merged;
@@ -391,23 +397,29 @@ function SplatRendererImpl() {
     if (sorterBufferVersionRef.current !== currentBufferVersionRef.current) {
       sorterBufferVersionRef.current = currentBufferVersionRef.current;
       (async () => {
-        if (SorterRef.current) {
-          SorterRef.current.setBuffer(
-            merged.gaussianBuffer,
-            merged.groupIndices,
-          );
-        } else {
-          const sorter = new (await SorterModulePromise).Sorter(
-            merged.gaussianBuffer,
-            merged.groupIndices,
-          );
-          // The component may have unmounted while the module was loading; if
-          // so, free the just-created Sorter instead of orphaning it.
-          if (sorterDisposedRef.current) {
-            sorter.delete();
-            return;
+        try {
+          if (SorterRef.current) {
+            SorterRef.current.setBuffer(
+              merged.gaussianBuffer,
+              merged.groupIndices,
+            );
+          } else {
+            const sorter = new (await SorterModulePromise).Sorter(
+              merged.gaussianBuffer,
+              merged.groupIndices,
+            );
+            // The component may have unmounted while the module was loading; if
+            // so, free the just-created Sorter instead of orphaning it.
+            if (sorterDisposedRef.current) {
+              sorter.delete();
+              return;
+            }
+            SorterRef.current = sorter;
           }
-          SorterRef.current = sorter;
+        } catch (err) {
+          // No SIMD WASM on this device (e.g. older iOS WebKit): blocking
+          // sorts are skipped; the worker's JS fallback handles ordering.
+          console.warn("[splat] main-thread WASM sorter unavailable:", err);
         }
       })();
     }
