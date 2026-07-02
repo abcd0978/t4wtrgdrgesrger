@@ -679,47 +679,49 @@ export function RotateHandle({
   );
 }
 
-/** Constant control speeds everywhere, from the two user knobs:
- * - 회전 감도 -> drag-rotate speed (touch gets a fixed internal attenuation;
- *   finger drags cover much more of a small screen than mouse drags).
- * - 확대 감도 -> two-finger / right-drag PAN speed too (pan is translation,
- *   same family as the fly-zoom that knob already drives).
- * Zoom itself is handled by GestureControls (fly-forward); OrbitControls'
- * own dolly is disabled. */
+/** Keeps OrbitControls' remaining role (pan) on the two-knob system:
+ * 확대 감도 also drives two-finger / right-drag PAN speed (translation, same
+ * family as fly-zoom). Rotation and zoom are fully custom in GestureControls
+ * (OrbitControls rotate + dolly are disabled). */
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 const TOUCH_ROTATE_FACTOR = 0.05;
 
-export function ConstantControlSpeed({ rotateSens = 1, zoomSens = 1 }: { rotateSens?: number; zoomSens?: number }) {
-  const controls = useThree((s) => s.controls) as { rotateSpeed: number; panSpeed: number } | null;
+export function ConstantControlSpeed({ zoomSens = 1 }: { zoomSens?: number }) {
+  const controls = useThree((s) => s.controls) as { panSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    controls.rotateSpeed = rotateSens * (IS_COARSE_POINTER ? TOUCH_ROTATE_FACTOR : 1);
     controls.panSpeed = zoomSens * (IS_COARSE_POINTER ? 0.6 : 1);
   });
   return null;
 }
 
-/** Wheel + touch gestures, all "fly" style:
- * - Wheel / two-finger pinch = move FORWARD/BACK along the view direction —
+/** Custom camera gestures — all relative to the CURRENT view, not world axes:
+ * - Drag (mouse-left / one finger) = screen-space orbit (trackball): horizontal
+ *   drags rotate about the screen's vertical axis, vertical drags about the
+ *   screen's horizontal axis, through the orbit target. The scene follows the
+ *   pointer regardless of which way you're looking.
+ * - Wheel / two-finger pinch = fly FORWARD/BACK along the view direction —
  *   camera and orbit target translate together (exactly like WASD), so zoom
  *   never stalls at the orbit target and can pass through the scene.
- * - Two-finger twist = ROLL around the screen axis (the view direction): the
- *   scene rotates about the screen centre following the fingers, like
- *   rotating a photo. Jumping to a preset view resets the horizon (those
- *   paths re-set camera.up to world z).
- * OrbitControls' own dolly is disabled (enableZoom=false); its two-finger pan
- * still composes with these. */
+ * - Two-finger twist = ROLL around the screen axis (photo-style).
+ * OrbitControls' own rotate + dolly are disabled; its pan still composes.
+ * Preset-view / origin jumps re-set camera.up, which levels the horizon. */
 export function GestureControls({ sceneRadius, zoomSens = 1, rotateSens = 1 }: { sceneRadius: number; zoomSens?: number; rotateSens?: number }) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; enabled: boolean; update: () => void } | null;
   const ref = React.useRef({ camera, controls, sceneRadius, zoomSens, rotateSens });
   ref.current = { camera, controls, sceneRadius, zoomSens, rotateSens };
 
   React.useEffect(() => {
     const el = gl.domElement;
     const fwd = new THREE.Vector3();
+    const off = new THREE.Vector3();
+    const upAxis = new THREE.Vector3();
+    const rightAxis = new THREE.Vector3();
+    const q1 = new THREE.Quaternion();
+    const q2 = new THREE.Quaternion();
 
     // Translate camera + target along the view direction by `move` world units.
     const flyForward = (move: number) => {
@@ -754,43 +756,87 @@ export function GestureControls({ sceneRadius, zoomSens = 1, rotateSens = 1 }: {
       prevAngle = two ? angleOf() : null;
       prevDist = two ? distOf() : null;
     };
+    // Screen-space orbit (trackball) drag state.
+    let rotId: number | null = null;
+    let rotX = 0, rotY = 0;
+
+    const trackballRotate = (dx: number, dy: number, isTouch: boolean) => {
+      const { camera: cam, controls: ctl, rotateSens: rs } = ref.current;
+      if (!ctl || ctl.enabled === false || (dx === 0 && dy === 0)) return;
+      const k = ((2 * Math.PI) / el.clientHeight) * rs * (isTouch ? TOUCH_ROTATE_FACTOR : 1);
+      off.copy(cam.position).sub(ctl.target);
+      upAxis.copy(cam.up).normalize();
+      fwd.copy(ctl.target).sub(cam.position).normalize();
+      rightAxis.crossVectors(fwd, upAxis).normalize();
+      // Negative angles make the scene follow the pointer.
+      q1.setFromAxisAngle(upAxis, -dx * k);
+      q2.setFromAxisAngle(rightAxis, -dy * k);
+      q1.multiply(q2);
+      off.applyQuaternion(q1);
+      cam.up.applyQuaternion(q1);
+      cam.position.copy(ctl.target).add(off);
+      ctl.update();
+    };
+
     const down = (e: PointerEvent) => {
-      if (e.pointerType !== "touch") return;
-      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      resetPair();
+      if (e.pointerType === "touch") {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        resetPair();
+        rotId = touches.size === 1 ? e.pointerId : null;
+      } else if (e.button === 0) {
+        rotId = e.pointerId;
+      } else {
+        return;
+      }
+      rotX = e.clientX; rotY = e.clientY;
     };
     const move = (e: PointerEvent) => {
-      if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
-      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (touches.size !== 2) return;
-      // Pinch = fly forward/back (spread fingers to move in).
-      const dist = distOf();
-      if (prevDist !== null) {
-        const { sceneRadius: r, zoomSens: zs } = ref.current;
-        flyForward((dist - prevDist) * 0.0025 * (r || 1) * zs);
-      }
-      prevDist = dist;
-      // Twist = roll around the view (screen) axis. The camera sits on that
-      // axis, so only the up vector needs rotating; negative sign makes the
-      // scene follow the fingers (screen y grows downward).
-      const a = angleOf();
-      if (prevAngle !== null) {
-        let d = a - prevAngle;
-        if (d > Math.PI) d -= 2 * Math.PI;
-        else if (d < -Math.PI) d += 2 * Math.PI;
-        const { camera: cam, controls: ctl, rotateSens: rs } = ref.current;
-        if (ctl && d !== 0) {
-          cam.getWorldDirection(fwd);
-          cam.up.applyAxisAngle(fwd, -d * rs); // 회전 감도 scales the twist too
-          ctl.update();
+      if (e.pointerType === "touch" && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) {
+          // Pinch = fly forward/back (spread fingers to move in).
+          const dist = distOf();
+          if (prevDist !== null) {
+            const { sceneRadius: r, zoomSens: zs } = ref.current;
+            flyForward((dist - prevDist) * 0.0025 * (r || 1) * zs);
+          }
+          prevDist = dist;
+          // Twist = roll around the view (screen) axis. The camera sits on
+          // that axis, so only the up vector needs rotating; negative sign
+          // makes the scene follow the fingers (screen y grows downward).
+          const a = angleOf();
+          if (prevAngle !== null) {
+            let d = a - prevAngle;
+            if (d > Math.PI) d -= 2 * Math.PI;
+            else if (d < -Math.PI) d += 2 * Math.PI;
+            const { camera: cam, controls: ctl, rotateSens: rs } = ref.current;
+            if (ctl && ctl.enabled !== false && d !== 0) {
+              cam.getWorldDirection(fwd);
+              cam.up.applyAxisAngle(fwd, -d * rs); // 회전 감도 scales the twist too
+              ctl.update();
+            }
+          }
+          prevAngle = a;
+          return;
         }
       }
-      prevAngle = a;
+      if (e.pointerId === rotId) {
+        const dx = e.clientX - rotX, dy = e.clientY - rotY;
+        rotX = e.clientX; rotY = e.clientY;
+        trackballRotate(dx, dy, e.pointerType === "touch");
+      }
     };
     const up = (e: PointerEvent) => {
+      if (e.pointerId === rotId) rotId = null;
       if (e.pointerType !== "touch") return;
       touches.delete(e.pointerId);
       resetPair();
+      if (touches.size === 1) {
+        // Back to one finger: resume rotating with the remaining pointer.
+        const [id] = touches.keys();
+        const p = touches.get(id)!;
+        rotId = id; rotX = p.x; rotY = p.y;
+      }
     };
     el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("pointerdown", down);

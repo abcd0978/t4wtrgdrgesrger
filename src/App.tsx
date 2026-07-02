@@ -1857,8 +1857,8 @@ export default function App() {
           instead, and captureStream (video export) grabs frames as they draw. */}
       <Canvas key={antialias ? "gl-aa" : "gl"} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
-        <OrbitControls makeDefault enableDamping={false} enableZoom={false} />
-        <ConstantControlSpeed rotateSens={rotateSens} zoomSens={zoomSens} />
+        <OrbitControls makeDefault enableDamping={false} enableZoom={false} enableRotate={false} />
+        <ConstantControlSpeed zoomSens={zoomSens} />
         <GestureControls sceneRadius={bounds ? radius(bounds) : 1} zoomSens={zoomSens} rotateSens={rotateSens} />
         <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
         <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => { setCamReplaying(false); if (videoRecRef.current) videoRecRef.current.stop(); }} />
