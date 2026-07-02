@@ -648,11 +648,12 @@ export function ConstantControlSpeed({ sceneRadius }: { sceneRadius: number }) {
 }
 
 /** WASD / arrow-key fly: translate camera + orbit target together so it reads as
- * moving through the scene. Speed scales with the orbit distance (so it works at
- * any zoom); Shift = faster, Q/E (or Space) = down/up along world-up (z). */
+ * moving through the scene. Constant speed everywhere (scaled only by scene
+ * size, not by zoom/orbit distance); Shift = faster, Q/E (or Space) = down/up
+ * along world-up (z). */
 const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e", " ", "shift", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
 
-export function KeyboardFly() {
+export function KeyboardFly({ sceneRadius = 1 }: { sceneRadius?: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
   const keys = React.useRef<Set<string>>(new Set());
@@ -694,8 +695,8 @@ export function KeyboardFly() {
     right.crossVectors(fwd, UP);
     if (right.lengthSq() < 1e-8) right.set(1, 0, 0); // looking straight up/down
     right.normalize();
-    const dist = camera.position.distanceTo(controls.target);
-    const stepLen = Math.max(dist * 0.8, 0.5) * (ks.has("shift") ? 3 : 1) * dt;
+    // Constant fly speed: half the scene radius per second, zoom-independent.
+    const stepLen = Math.max(sceneRadius * 0.5, 0.5) * (ks.has("shift") ? 3 : 1) * dt;
 
     // Strafe + vertical = pan: move camera and target together (distance kept).
     pan.set(0, 0, 0);
@@ -709,15 +710,16 @@ export function KeyboardFly() {
       controls.target.add(pan);
     }
 
-    // Forward/back = dolly toward/away from the target, exactly like wheel zoom:
-    // camera-only, so the distance (and thus the speed) shrinks as you approach.
+    // Forward/back = true fly: camera and target move together along the view
+    // direction at the same constant speed (so you can pass through/beyond the
+    // orbit target instead of slowing into it).
     let f = 0;
     if (ks.has("w") || ks.has("arrowup")) f += 1;
     if (ks.has("s") || ks.has("arrowdown")) f -= 1;
-    if (f !== 0 && dist > 1e-6) {
-      const newDist = Math.max(1e-4, dist - f * stepLen);
-      dirTC.copy(camera.position).sub(controls.target).normalize();
-      camera.position.copy(controls.target).addScaledVector(dirTC, newDist);
+    if (f !== 0) {
+      dirTC.copy(fwd).multiplyScalar(f * stepLen);
+      camera.position.add(dirTC);
+      controls.target.add(dirTC);
     }
     controls.update();
   });
