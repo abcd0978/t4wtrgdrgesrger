@@ -648,19 +648,23 @@ export function RotateHandle({
   );
 }
 
-/** Constant rotate speed everywhere, from the single 회전 감도 knob. Touch
- * gets a fixed internal attenuation (finger drags cover much more of a small
- * screen than mouse drags). Zoom is handled by GestureControls (fly-forward),
- * so OrbitControls' own dolly is disabled. */
+/** Constant control speeds everywhere, from the two user knobs:
+ * - 회전 감도 -> drag-rotate speed (touch gets a fixed internal attenuation;
+ *   finger drags cover much more of a small screen than mouse drags).
+ * - 확대 감도 -> two-finger / right-drag PAN speed too (pan is translation,
+ *   same family as the fly-zoom that knob already drives).
+ * Zoom itself is handled by GestureControls (fly-forward); OrbitControls'
+ * own dolly is disabled. */
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 const TOUCH_ROTATE_FACTOR = 0.05;
 
-export function ConstantControlSpeed({ rotateSens = 1 }: { rotateSens?: number }) {
-  const controls = useThree((s) => s.controls) as { rotateSpeed: number } | null;
+export function ConstantControlSpeed({ rotateSens = 1, zoomSens = 1 }: { rotateSens?: number; zoomSens?: number }) {
+  const controls = useThree((s) => s.controls) as { rotateSpeed: number; panSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
     controls.rotateSpeed = rotateSens * (IS_COARSE_POINTER ? TOUCH_ROTATE_FACTOR : 1);
+    controls.panSpeed = zoomSens * (IS_COARSE_POINTER ? 0.6 : 1);
   });
   return null;
 }
@@ -675,12 +679,12 @@ export function ConstantControlSpeed({ rotateSens = 1 }: { rotateSens?: number }
  *   paths re-set camera.up to world z).
  * OrbitControls' own dolly is disabled (enableZoom=false); its two-finger pan
  * still composes with these. */
-export function GestureControls({ sceneRadius, zoomSens = 1 }: { sceneRadius: number; zoomSens?: number }) {
+export function GestureControls({ sceneRadius, zoomSens = 1, rotateSens = 1 }: { sceneRadius: number; zoomSens?: number; rotateSens?: number }) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
-  const ref = React.useRef({ camera, controls, sceneRadius, zoomSens });
-  ref.current = { camera, controls, sceneRadius, zoomSens };
+  const ref = React.useRef({ camera, controls, sceneRadius, zoomSens, rotateSens });
+  ref.current = { camera, controls, sceneRadius, zoomSens, rotateSens };
 
   React.useEffect(() => {
     const el = gl.domElement;
@@ -743,10 +747,10 @@ export function GestureControls({ sceneRadius, zoomSens = 1 }: { sceneRadius: nu
         let d = a - prevAngle;
         if (d > Math.PI) d -= 2 * Math.PI;
         else if (d < -Math.PI) d += 2 * Math.PI;
-        const { camera: cam, controls: ctl } = ref.current;
+        const { camera: cam, controls: ctl, rotateSens: rs } = ref.current;
         if (ctl && d !== 0) {
           cam.getWorldDirection(fwd);
-          cam.up.applyAxisAngle(fwd, -d);
+          cam.up.applyAxisAngle(fwd, -d * rs); // 회전 감도 scales the twist too
           ctl.update();
         }
       }
