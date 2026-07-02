@@ -115,6 +115,14 @@ export default function App() {
   const [autoDprValue, setAutoDprValue] = React.useState(nativeDpr);
   const [dpr, setDpr] = React.useState(1.5); // manual value when auto is off
   const [antialias, setAntialias] = React.useState(false);
+  // Touch control sensitivity (rotate + pinch), persisted; desktop unaffected.
+  const [touchSens, setTouchSens] = React.useState(() => {
+    const v = parseFloat(lsGet("touchSens", "0.25"));
+    return Number.isFinite(v) && v > 0 ? v : 0.25;
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem(LS + "touchSens", String(touchSens)); } catch { /* ignore */ }
+  }, [touchSens]);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -1319,7 +1327,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, touchSens, setTouchSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1565,7 +1573,7 @@ export default function App() {
       <Canvas key={antialias ? "gl-aa" : "gl"} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
-        {bounds && <ConstantControlSpeed sceneRadius={radius(bounds)} />}
+        {bounds && <ConstantControlSpeed sceneRadius={radius(bounds)} touchSens={touchSens} />}
         <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
         <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => { setCamReplaying(false); if (videoRecRef.current) videoRecRef.current.stop(); }} />
         {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}

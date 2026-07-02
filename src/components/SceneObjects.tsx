@@ -641,15 +641,17 @@ export function RotateHandle({
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 
-export function ConstantControlSpeed({ sceneRadius }: { sceneRadius: number }) {
+export function ConstantControlSpeed({ sceneRadius, touchSens = 0.25 }: { sceneRadius: number; touchSens?: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    controls.rotateSpeed = IS_COARSE_POINTER ? 0.4 : 1;
+    // One user-facing sensitivity knob drives both rotate and the pinch cap.
+    controls.rotateSpeed = IS_COARSE_POINTER ? touchSens : 1;
     const dist = camera.position.distanceTo(controls.target);
     const boost = (sceneRadius || 1) / Math.max(dist, 1e-6);
-    controls.zoomSpeed = Math.min(IS_COARSE_POINTER ? 6 : 30, Math.max(1, boost));
+    const zoomCap = IS_COARSE_POINTER ? Math.max(1.5, touchSens * 24) : 30;
+    controls.zoomSpeed = Math.min(zoomCap, Math.max(1, boost));
   });
   return null;
 }
