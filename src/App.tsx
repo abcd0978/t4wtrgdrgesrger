@@ -97,9 +97,12 @@ export default function App() {
   const [bookmarks, setBookmarks] = React.useState<View[]>(() => {
     try { return JSON.parse(lsGet("bookmarks", "[]")); } catch { return []; }
   });
-  const [bg, setBg] = React.useState("#ffffff");
+  // Black bg + no grid by default (antimatter15's look): gaussian surfaces are
+  // never fully opaque, so a white bg and grid lines bleed through the model
+  // and read as a translucent/x-ray effect. Both stay toggleable in settings.
+  const [bg, setBg] = React.useState("#000000");
   const [showMap, setShowMap] = React.useState(true);
-  const [showGrid, setShowGrid] = React.useState(true);
+  const [showGrid, setShowGrid] = React.useState(false);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
   // Splatting is fill-rate bound (translucent quad overdraw), so resolution is
   // the main quality/perf lever. Default is auto (antimatter15-style dynamic
@@ -107,6 +110,7 @@ export default function App() {
   // native devicePixelRatio sharpness. Uncheck 자동 in settings to pin a value.
   const [dprAuto, setDprAuto] = React.useState(true);
   const [dpr, setDpr] = React.useState(1.5); // manual value when auto is off
+  const [antialias, setAntialias] = React.useState(false);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -1019,6 +1023,14 @@ export default function App() {
     turntableTimer.current = window.setTimeout(() => { setAutoOrbit(false); videoRecRef.current?.stop(); }, durMs);
   }
 
+  // Toggling MSAA needs a fresh WebGL context (Canvas remount via key), which
+  // resets the camera — stash the current view so ApplyCamera restores it.
+  function toggleAntialias(v: boolean) {
+    const cur = camApiRef.current?.get();
+    if (cur && buffer) pendingView.current = { p: cur.p, t: cur.t };
+    setAntialias(v);
+  }
+
   // High-res screenshot: briefly pin DPR above the current effective value,
   // let it render, capture, then restore (including auto mode).
   function captureHiRes(scale: number) {
@@ -1106,7 +1118,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1321,7 +1333,7 @@ export default function App() {
           costs fill-rate. preserveDrawingBuffer off: skips the per-frame
           backbuffer copy; CanvasCapture re-renders right before reading pixels
           instead, and captureStream (video export) grabs frames as they draw. */}
-      <Canvas dpr={effDpr} gl={{ antialias: false, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+      <Canvas key={antialias ? "gl-aa" : "gl"} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}

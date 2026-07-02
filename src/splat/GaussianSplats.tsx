@@ -142,6 +142,9 @@ function SplatRendererImpl() {
   const splatContext = React.useContext(GaussianSplatsContext)!;
   const viewer = React.useContext(ViewerContext)!;
   const settings = React.useContext(RenderSettingsContext);
+  // Ref mirror so updateCamera (a stable callback) reads live settings.
+  const settingsRef = React.useRef(settings);
+  settingsRef.current = settings;
   const groupBufferFromId = splatContext.gaussianSplatState.store(
     (state) => state.groupBufferFromId,
   );
@@ -514,6 +517,7 @@ function SplatRendererImpl() {
           lastSortTzRef.current.set(Tz_camera_groups);
         } else {
           const lastSortTz = lastSortTzRef.current;
+          const st = settingsRef.current.sortThreshold;
           let sortNeeded = lastSortTz.length !== Tz_camera_groups.length;
           for (let g = 0; !sortNeeded && g * 4 < Tz_camera_groups.length; g++) {
             const i = g * 4;
@@ -522,7 +526,7 @@ function SplatRendererImpl() {
               Tz_camera_groups[i + 1] * lastSortTz[i + 1] +
               Tz_camera_groups[i + 2] * lastSortTz[i + 2];
             const dtz = Math.abs(Tz_camera_groups[i + 3] - lastSortTz[i + 3]);
-            if (Math.abs(dot - 1) > 0.01 || dtz > 0.01 * (1.0 + Math.abs(lastSortTz[i + 3])))
+            if (Math.abs(dot - 1) > st || dtz > st * (1.0 + Math.abs(lastSortTz[i + 3])))
               sortNeeded = true;
           }
           if (sortNeeded) {

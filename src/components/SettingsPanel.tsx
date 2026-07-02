@@ -28,6 +28,7 @@ export interface SceneOpts {
   dpr: number; setDpr: (v: number) => void;
   dprAuto: boolean; setDprAuto: (v: boolean) => void;
   effDpr: number; // what the canvas actually uses (auto-resolved or manual)
+  antialias: boolean; setAntialias: (v: boolean) => void; // toggling recreates the GL context
   showAxes: boolean; setShowAxes: (v: boolean) => void;
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
@@ -45,7 +46,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
   const disabledLayer = { display: "flex", gap: 6, alignItems: "center", opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -74,6 +75,7 @@ export function SettingsPanel({
       <NumSlider label="falloff" k="falloffCutoff" min={1} max={9} step={0.25} settings={settings} setSettings={setSettings} />
       <NumSlider label="alphaTest" k="alphaTest" min={0} max={0.5} step={0.01} settings={settings} setSettings={setSettings} />
       <NumSlider label="fade" k="fadeSpeed" min={0.1} max={10} step={0.1} settings={settings} setSettings={setSettings} />
+      <NumSlider label="sort thresh" k="sortThreshold" min={0} max={0.05} step={0.001} settings={settings} setSettings={setSettings} />
       <b>레이어 (Layers)</b>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} /> Gaussian Map</label>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} /> Grid</label>
@@ -88,6 +90,7 @@ export function SettingsPanel({
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>grid div</span><input type="range" min={2} max={60} step={1} value={grid.divisions} onChange={(e) => setGrid((g) => ({ ...g, divisions: parseInt(e.target.value) }))} style={{ flex: 1 }} /><span style={{ width: 46, textAlign: "right" }}>{grid.divisions}</span></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}><span style={{ width: 84 }}>dash/gap</span><input type="range" min={0.02} max={1} step={0.02} value={grid.dashSize} onChange={(e) => setGrid((g) => ({ ...g, dashSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /><input type="range" min={0.02} max={1} step={0.02} value={grid.gapSize} onChange={(e) => setGrid((g) => ({ ...g, gapSize: parseFloat(e.target.value) }))} style={{ flex: 1 }} /></label>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }} title="자동: 50만 스플랫 초과 시 1.0, 이하는 기기 해상도"><span style={{ width: 84 }}>DPR</span><input type="checkbox" checked={dprAuto} onChange={(e) => setDprAuto(e.target.checked)} /><span style={{ fontSize: 11 }}>자동</span><input type="range" min={0.5} max={3} step={0.25} value={dprAuto ? effDpr : dpr} disabled={dprAuto} onChange={(e) => setDpr(parseFloat(e.target.value))} style={{ flex: 1, opacity: dprAuto ? 0.45 : 1 }} /><span style={{ width: 46, textAlign: "right" }}>{Math.round(effDpr * 100) / 100}</span></label>
+      <label style={{ display: "flex", gap: 6, alignItems: "center" }} title="스플랫에는 효과 없음 — 그리드/기즈모 선의 계단 완화. 켜면 화면이 잠깐 재생성됨"><input type="checkbox" checked={antialias} onChange={(e) => setAntialias(e.target.checked)} /> 안티앨리어싱 (MSAA) <span style={{ fontSize: 11, opacity: 0.6 }}>선·그리드용</span></label>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
 
       <b>클리핑 (단면)</b>

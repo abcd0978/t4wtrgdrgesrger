@@ -11,6 +11,7 @@ export interface RenderSettings {
   falloffCutoff: number; // gaussian tail cutoff radius² (fragment discard)
   alphaTest: number; // discard fragments below this alpha
   fadeSpeed: number; // fade-in animation speed
+  sortThreshold: number; // re-sort when view rotates past |dot-1| (0 = every move)
   clipAxis: number; // clipping plane axis: -1 off, 0/1/2 = X/Y/Z
   clipPos: number; // world coord of the clip plane along clipAxis
   clipSign: number; // which side to cut: +1 or -1
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   falloffCutoff: 4.0,
   alphaTest: 0.0,
   fadeSpeed: 2.0,
+  sortThreshold: 0.01, // antimatter15's value (~8° of rotation)
   clipAxis: -1,
   clipPos: 0,
   clipSign: 1,
