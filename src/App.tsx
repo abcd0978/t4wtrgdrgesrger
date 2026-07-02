@@ -1,4 +1,6 @@
 import React from "react";
+import { Vector3 } from "three";
+import { ConvexHull } from "three/examples/jsm/math/ConvexHull.js";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
@@ -8,7 +10,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked } from "./lib/splatFile";
@@ -73,7 +75,7 @@ const HELP = [
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
   ["더블클릭", "맨 앞 가우시안 선택 (Shift: 누적)"],
-  ["⬠ 다각형 선택", "도구 ▾ → 점을 찍어 도형을 만들고 그 안을 선택"],
+  ["◆ 다면체 선택", "도구 ▾ → 가우시안 4점 이상으로 입체 도형을 만들어 그 안을 선택"],
   ["길게 누르기 (0.5초)", "그 지점을 회전축(피벗)으로"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
   ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
@@ -197,12 +199,11 @@ export default function App() {
   // Polygon select: screen-space vertices picked by double-click; gaussians
   // inside the (front-surface filtered) polygon get selected.
   const [polyMode, setPolyMode] = React.useState(false);
-  const [polyPts, setPolyPts] = React.useState<{ x: number; y: number }[]>([]);
+  const [polyPts, setPolyPts] = React.useState<[number, number, number][]>([]);
   const [polyAdd, setPolyAdd] = React.useState(false);
   // True once the user explicitly picked a rotation pivot (long-press or
   // 선택을 회전축으로); 공전 then revolves around it instead of the world origin.
   const [pivotSet, setPivotSet] = React.useState(false);
-  const polySelectRef = React.useRef<((pts: { x: number; y: number }[], additive: boolean) => number) | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -753,10 +754,28 @@ export default function App() {
     });
   }
   function runPolySelect() {
-    if (polyPts.length < 3) return;
-    const n = polySelectRef.current?.(polyPts, polyAdd) ?? 0;
+    // Convex hull of the picked gaussian vertices; select everything inside.
+    if (!buffer || polyPts.length < 4) return;
+    let hull: ConvexHull;
+    try {
+      hull = new ConvexHull().setFromPoints(polyPts.map((p) => new Vector3(p[0], p[1], p[2])));
+    } catch {
+      setStatus("다면체를 만들 수 없음 — 점들이 한 평면/직선 위에 있어요");
+      return;
+    }
+    const dv = viewOf(buffer);
+    const slots = buffer.length / 8;
+    const v = new Vector3();
+    const out = polyAdd ? new Set(selection) : new Set<number>();
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+      if (hull.containsPoint(v)) out.add(i);
+    }
+    setSelection(out);
     setPolyPts([]);
-    setStatus(`⬠ 다각형 선택: ${n.toLocaleString()}개`);
+    setStatus(`◆ 다면체 선택: ${out.size.toLocaleString()}개`);
   }
 
   // Invert: select every visible gaussian that isn't currently selected.
@@ -1529,7 +1548,7 @@ export default function App() {
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
         <Dropdown label={`도구${measureMode || polyMode || showFilter || showGroups || showCompare || compares.length ? " ●" : ""}`} className="menu-only">
           <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); setPolyMode(false); setPolyPts([]); }} disabled={!buffer}>측정</button>
-          <button className={polyMode ? "active" : ""} onClick={togglePolyMode} disabled={!buffer} title="점을 찍어 도형을 만들고, 도형 안의 (보이는) 가우시안을 선택">⬠ 다각형 선택</button>
+          <button className={polyMode ? "active" : ""} onClick={togglePolyMode} disabled={!buffer} title="가우시안을 꼭짓점으로 찍어 입체 다면체를 만들고 (최소 4점), 그 안의 가우시안을 전부 선택">◆ 다면체 선택</button>
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{compares.length ? ` (${compares.length})` : ""}</button>
@@ -1579,31 +1598,17 @@ export default function App() {
       )}
 
       {polyMode && (
-        <FloatingPanel title="⬠ 다각형 선택" onClose={() => { setPolyMode(false); setPolyPts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(340px, calc(100vw - 20px))">
-          <span className="muted" style={{ fontSize: 12 }}>더블클릭으로 꼭짓점을 찍으세요 ({polyPts.length}점 · 3점 이상이면 실행 가능)</span>
+        <FloatingPanel title="◆ 다면체 선택" onClose={() => { setPolyMode(false); setPolyPts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(340px, calc(100vw - 20px))">
+          <span className="muted" style={{ fontSize: 12 }}>가우시안을 더블클릭해 꼭짓점을 찍으세요 ({polyPts.length}점 · 4점부터 다면체) — 점은 씬에 고정되니 카메라를 돌려가며 찍어도 됩니다</span>
           <label className="row"><input type="checkbox" checked={polyAdd} onChange={(e) => setPolyAdd(e.target.checked)} /> 기존 선택에 추가</label>
           <div className="row" style={{ gap: 6 }}>
             <button className="grow" onClick={() => setPolyPts((p) => p.slice(0, -1))} disabled={polyPts.length === 0}>↩ 마지막 점</button>
             <button className="grow ghost" onClick={() => setPolyPts([])} disabled={polyPts.length === 0}>지우기</button>
           </div>
-          <button className="accent" onClick={runPolySelect} disabled={polyPts.length < 3}>✓ 도형 안 선택</button>
-          <span className="muted" style={{ fontSize: 11 }}>보이는 표면만 선택됨 (뒤에 가려진 것은 제외)</span>
+          <button className="accent" onClick={runPolySelect} disabled={polyPts.length < 4}>✓ 다면체 안 선택</button>
         </FloatingPanel>
       )}
 
-      {polyMode && polyPts.length > 0 && (
-        <svg style={{ position: "absolute", inset: 0, zIndex: 4, pointerEvents: "none", width: "100%", height: "100%" }}>
-          {polyPts.length >= 2 && (
-            <polygon
-              points={polyPts.map((p) => `${p.x},${p.y}`).join(" ")}
-              fill={polyPts.length >= 3 ? "rgba(255,139,61,0.14)" : "none"}
-              stroke="var(--accent)" strokeWidth={1.5} strokeDasharray="6 4" />
-          )}
-          {polyPts.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={5} fill={i === 0 ? "var(--accent)" : "rgba(255,139,61,0.85)"} stroke="#fff" strokeWidth={1.5} />
-          ))}
-        </svg>
-      )}
 
       {measureMode && (
         <FloatingPanel title="📏 측정 (다점)" onClose={() => { setMeasureMode(false); setMeasurePts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(360px, calc(100vw - 20px))">
@@ -1906,7 +1911,7 @@ export default function App() {
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
         <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode}
-          polyMode={polyMode} onPolyPick={(x, y) => setPolyPts((p) => [...p, { x, y }])} polySelectRef={polySelectRef}
+          polyMode={polyMode} onPolyPick={(p) => setPolyPts((prev) => [...prev, p])}
           onMeasurePick={onMeasurePick}
           onSetPivot={(p) => { camApiRef.current?.setTarget(p); setPivotSet(true); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
@@ -1917,6 +1922,7 @@ export default function App() {
           </>
         )}
         {measurePts.length > 0 && <MeasureView points={measurePts} />}
+        {polyMode && polyPts.length > 0 && <PolyhedronPreview points={polyPts} />}
         <RenderSettingsContext.Provider value={settingsDerived}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
           {display && bounds && (
