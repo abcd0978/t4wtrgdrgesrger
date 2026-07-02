@@ -40,11 +40,10 @@ const TEST_SCENES: { name: string; file: string; big?: boolean }[] = [
 ];
 
 // First-visit scene: Train auto-loads when the URL doesn't specify a run.
-// Pinned starting camera: position (-4.38, -2.92, 0.72) looking along
-// (0.76, 0.59, -0.26); target = position + direction × 5 (orbit pivot).
+// Pinned starting camera (copied from 통계 > 카메라 좌표 복사).
 const DEFAULT_TEST_VIEW: { p: [number, number, number]; t: [number, number, number] } | null = {
-  p: [-4.38, -2.92, 0.72],
-  t: [-0.58, 0.03, -0.58],
+  p: [-3.46, -3.853, 0.712],
+  t: [-1.434, 0.499, -0.625],
 };
 
 // Persist the load inputs (server url / run / mode / frames) across visits.
