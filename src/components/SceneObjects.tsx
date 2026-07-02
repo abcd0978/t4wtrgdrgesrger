@@ -51,8 +51,10 @@ export function FitCamera({ bounds, enabled = true, onFitted }: { bounds: Bounds
     const c = center(bounds);
     camera.up.set(0, 0, 1);
     camera.position.set(0, 0, 0);
-    // If the data centre coincides with the origin, aim at -y instead of itself.
-    const t = Math.hypot(c[0], c[1], c[2]) > r * 1e-3 ? c : [0, -1, 0];
+    // Face AWAY from the data centre (the capture's forward direction is
+    // typically opposite the reconstructed content); fall back to +y when the
+    // centre coincides with the origin.
+    const t = Math.hypot(c[0], c[1], c[2]) > r * 1e-3 ? [-c[0], -c[1], -c[2]] : [0, 1, 0];
     if (controls?.target) { controls.target.set(t[0], t[1], t[2]); controls.update(); }
     else camera.lookAt(t[0], t[1], t[2]);
     onFitted?.();
@@ -642,13 +644,13 @@ export function RotateHandle({
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 
-export function ConstantControlSpeed({ sceneRadius, touchSens = 0.25 }: { sceneRadius: number; touchSens?: number }) {
+export function ConstantControlSpeed({ sceneRadius, touchSens = 0.05, rotateSens = 1 }: { sceneRadius: number; touchSens?: number; rotateSens?: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    // One user-facing sensitivity knob drives both rotate and the pinch cap.
-    controls.rotateSpeed = IS_COARSE_POINTER ? touchSens : 1;
+    // Touch: one knob drives both rotate and the pinch cap. Desktop: 회전 감도.
+    controls.rotateSpeed = IS_COARSE_POINTER ? touchSens : rotateSens;
     const dist = camera.position.distanceTo(controls.target);
     const boost = (sceneRadius || 1) / Math.max(dist, 1e-6);
     const zoomCap = IS_COARSE_POINTER ? Math.max(1.5, touchSens * 24) : 30;
