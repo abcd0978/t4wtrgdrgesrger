@@ -62,6 +62,7 @@ export interface SceneOpts {
   antialias: boolean; setAntialias: (v: boolean) => void; // toggling recreates the GL context
   rotateSens: number; setRotateSens: (v: number) => void; // rotate sensitivity (mouse + touch)
   zoomSens: number; setZoomSens: (v: number) => void; // zoom sensitivity (wheel + pinch)
+  moveSens: number; setMoveSens: (v: number) => void; // translation sensitivity (pan + WASD)
   minFps: number; setMinFps: (v: number) => void; // adaptive-DPR floor
   undoCapMB: number; setUndoCapMB: (v: number) => void; // undo/redo snapshot budget
   reloadRenderer: () => void; // remount the splat renderer (worker re-init)
@@ -82,7 +83,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, moveSens, setMoveSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
   const disabledLayer = { ...row, opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -167,10 +168,15 @@ export function SettingsPanel({
         <input type="range" min={0.1} max={5} step={0.05} value={rotateSens} onChange={(e) => setRotateSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
         <span style={{ width: 46, textAlign: "right" }}>{rotateSens.toFixed(2)}</span>
       </label>
-      <label style={row} title="확대 민감도 — 휠·핀치 모두 적용">
+      <label style={row} title="확대(전진) 민감도 — 휠·핀치 모두 적용">
         <span style={{ width: 84 }}>확대 감도</span>
         <input type="range" min={0.1} max={2} step={0.05} value={zoomSens} onChange={(e) => setZoomSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
         <span style={{ width: 46, textAlign: "right" }}>{zoomSens.toFixed(2)}</span>
+      </label>
+      <label style={row} title="이동 민감도 — 우클릭 드래그 팬 · 두 손가락 팬 · WASD 모두 적용">
+        <span style={{ width: 84 }}>이동 감도</span>
+        <input type="range" min={0.1} max={5} step={0.05} value={moveSens} onChange={(e) => setMoveSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
+        <span style={{ width: 46, textAlign: "right" }}>{moveSens.toFixed(2)}</span>
       </label>
 
       <Sect>렌더 (스플랫 모양)</Sect>

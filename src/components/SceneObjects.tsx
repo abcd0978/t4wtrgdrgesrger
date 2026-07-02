@@ -668,19 +668,19 @@ export function RotateHandle({
   );
 }
 
-/** Keeps OrbitControls' remaining role (pan) on the two-knob system:
- * 확대 감도 also drives two-finger / right-drag PAN speed (translation, same
- * family as fly-zoom). Rotation and zoom are fully custom in GestureControls
- * (OrbitControls rotate + dolly are disabled). */
+/** Keeps OrbitControls' remaining role (pan) on the knob system: 이동 감도
+ * drives two-finger / right-drag PAN speed (translation, shared with WASD).
+ * Rotation and zoom are fully custom in GestureControls (OrbitControls
+ * rotate + dolly are disabled). */
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 const TOUCH_ROTATE_FACTOR = 0.05;
 
-export function ConstantControlSpeed({ zoomSens = 1 }: { zoomSens?: number }) {
+export function ConstantControlSpeed({ moveSens = 1 }: { moveSens?: number }) {
   const controls = useThree((s) => s.controls) as { panSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    controls.panSpeed = zoomSens * (IS_COARSE_POINTER ? 0.6 : 1);
+    controls.panSpeed = moveSens * (IS_COARSE_POINTER ? 0.6 : 1);
   });
   return null;
 }
@@ -849,7 +849,7 @@ export function GestureControls({ sceneRadius, zoomSens = 1, rotateSens = 1 }: {
  * along world-up (z). */
 const FLY_KEYS = new Set(["w", "a", "s", "d", "q", "e", " ", "shift", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
 
-export function KeyboardFly({ sceneRadius = 1 }: { sceneRadius?: number }) {
+export function KeyboardFly({ sceneRadius = 1, moveSens = 1 }: { sceneRadius?: number; moveSens?: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
   const keys = React.useRef<Set<string>>(new Set());
@@ -891,8 +891,9 @@ export function KeyboardFly({ sceneRadius = 1 }: { sceneRadius?: number }) {
     right.crossVectors(fwd, UP);
     if (right.lengthSq() < 1e-8) right.set(1, 0, 0); // looking straight up/down
     right.normalize();
-    // Constant fly speed: half the scene radius per second, zoom-independent.
-    const stepLen = Math.max(sceneRadius * 0.5, 0.5) * (ks.has("shift") ? 3 : 1) * dt;
+    // Constant fly speed: half the scene radius per second, zoom-independent,
+    // scaled by 이동 감도 (shared with pan).
+    const stepLen = Math.max(sceneRadius * 0.5, 0.5) * moveSens * (ks.has("shift") ? 3 : 1) * dt;
 
     // Strafe + vertical = pan: move camera and target together (distance kept).
     pan.set(0, 0, 0);

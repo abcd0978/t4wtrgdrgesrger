@@ -164,6 +164,11 @@ export default function App() {
     const v = parseFloat(lsGet("zoomSens", "1"));
     return Number.isFinite(v) && v > 0 ? v : 1;
   });
+  // Translation sensitivity: right-drag / two-finger pan AND WASD fly.
+  const [moveSens, setMoveSens] = React.useState(() => {
+    const v = parseFloat(lsGet("moveSens", "1"));
+    return Number.isFinite(v) && v > 0 ? v : 1;
+  });
   // Adaptive-DPR floor: resolution is shed only when fps falls below this.
   const [minFps, setMinFps] = React.useState(() => {
     const v = parseFloat(lsGet("minFps", "15"));
@@ -178,10 +183,11 @@ export default function App() {
     try {
       localStorage.setItem(LS + "rotateSens", String(rotateSens));
       localStorage.setItem(LS + "zoomSens", String(zoomSens));
+      localStorage.setItem(LS + "moveSens", String(moveSens));
       localStorage.setItem(LS + "minFps", String(minFps));
       localStorage.setItem(LS + "undoCapMB", String(undoCapMB));
     } catch { /* ignore */ }
-  }, [rotateSens, zoomSens, minFps, undoCapMB]);
+  }, [rotateSens, zoomSens, moveSens, minFps, undoCapMB]);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -1629,7 +1635,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer: () => setSplatKey((k) => k + 1), showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, moveSens, setMoveSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer: () => setSplatKey((k) => k + 1), showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1947,12 +1953,12 @@ export default function App() {
       <Canvas key={antialias ? "gl-aa" : "gl"} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} enableZoom={false} enableRotate={false} />
-        <ConstantControlSpeed zoomSens={zoomSens} />
+        <ConstantControlSpeed moveSens={moveSens} />
         <GestureControls sceneRadius={bounds ? radius(bounds) : 1} zoomSens={zoomSens} rotateSens={rotateSens} />
         <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
         <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => { setCamReplaying(false); if (videoRecRef.current) videoRecRef.current.stop(); }} />
         {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}
-        <KeyboardFly sceneRadius={bounds ? radius(bounds) : 1} />
+        <KeyboardFly sceneRadius={bounds ? radius(bounds) : 1} moveSens={moveSens} />
         <CanvasCapture captureRef={captureRef} captureBlobRef={captureBlobRef} canvasRef={canvasRef} download={downloadBlob} />
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
