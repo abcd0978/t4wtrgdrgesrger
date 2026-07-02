@@ -1044,6 +1044,67 @@ export default function App() {
       setStatus("compare error: " + (err as Error).message);
     } finally { setBusy2(false); }
   }
+  // Difference heatmap: recolour the MAIN scene by distance to the nearest
+  // gaussian in the overlay (spatial hash, capped at 5% of the scene radius).
+  // Blue = unchanged, red = no counterpart nearby. Undoable (colour edit).
+  function diffHeatmap(item: CompareItem) {
+    if (!buffer || !bounds) return;
+    setStatus(`Δ 히트맵 계산 중… (${item.name})`);
+    window.setTimeout(() => {
+      const cap = radius(bounds!) * 0.05;
+      const cell = cap;
+      const key = (ix: number, iy: number, iz: number) =>
+        ((ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791)) >>> 0;
+      // Grid of overlay positions (sub-sampled to ~1M).
+      const bdv = viewOf(item.buffer);
+      const bslots = item.buffer.length / 8;
+      const bstep = Math.max(1, Math.floor(bslots / 1_000_000));
+      const grid = new Map<number, number[]>();
+      for (let i = 0; i < bslots; i += bstep) {
+        const b = i * 32;
+        if (bdv.getUint8(b + 31) === 0) continue;
+        const x = bdv.getFloat32(b, true), y = bdv.getFloat32(b + 4, true), z = bdv.getFloat32(b + 8, true);
+        const k = key(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / cell));
+        let arr = grid.get(k);
+        if (!arr) grid.set(k, (arr = []));
+        arr.push(x, y, z);
+      }
+      pushUndo(buffer!);
+      const nb = buffer!.slice();
+      const ndv = new DataView(nb.buffer);
+      const slots = nb.length / 8;
+      const cap2 = cap * cap;
+      const near2 = cap2 * 0.01; // "close enough" early exit (10% of cap)
+      for (let i = 0; i < slots; i++) {
+        const b = i * 32;
+        if (ndv.getUint8(b + 31) === 0) continue;
+        const x = ndv.getFloat32(b, true), y = ndv.getFloat32(b + 4, true), z = ndv.getFloat32(b + 8, true);
+        const ix = Math.floor(x / cell), iy = Math.floor(y / cell), iz = Math.floor(z / cell);
+        let min2 = cap2;
+        outer: for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dz = -1; dz <= 1; dz++) {
+              const arr = grid.get(key(ix + dx, iy + dy, iz + dz));
+              if (!arr) continue;
+              for (let j = 0; j < arr.length; j += 3) {
+                const ddx = arr[j] - x, ddy = arr[j + 1] - y, ddz = arr[j + 2] - z;
+                const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                if (d2 < min2) {
+                  min2 = d2;
+                  if (min2 < near2) break outer;
+                }
+              }
+            }
+        const t = Math.min(1, Math.sqrt(min2) / cap);
+        ndv.setUint8(b + 28, Math.round(255 * t));
+        ndv.setUint8(b + 29, Math.round(140 * (1 - Math.abs(2 * t - 1))));
+        ndv.setUint8(b + 30, Math.round(255 * (1 - t)));
+      }
+      setBuffer(nb);
+      setStatus(`Δ 히트맵: 파랑=일치 · 빨강=차이 (기준 ${item.name}, undo로 복원)`);
+    }, 30);
+  }
+
   function toggleCompare(id: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, visible: !c.visible } : c)); }
   function removeCompare(id: number) { setCompares((cs) => cs.filter((c) => c.id !== id)); }
   function clearCompare() { setCompares([]); }
@@ -1509,6 +1570,7 @@ export default function App() {
                   <button className="ghost icon" onClick={() => toggleCompare(c.id)} title={c.visible ? "숨기기" : "보이기"}>{c.visible ? "👁" : "🚫"}</button>
                   <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", opacity: c.visible ? 1 : 0.5 }} title={c.name}>{c.name} · {(c.buffer.length / 8).toLocaleString()}</span>
                   <button onClick={() => switchToMain(c)} title="이 run을 편집 대상(씬)으로">편집</button>
+                  <button onClick={() => diffHeatmap(c)} title="현재 씬을 이 오버레이와의 거리로 색칠 (파랑=일치, 빨강=차이 · undo로 복원)">Δ</button>
                   <button className="ghost icon" onClick={() => removeCompare(c.id)} title="제거">✕</button>
                 </div>
               ))}

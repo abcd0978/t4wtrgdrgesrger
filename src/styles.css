@@ -196,4 +196,13 @@ input[type="range"].timeline::-moz-range-thumb {
   input[type="checkbox"] { width: 20px; height: 20px; }
   input[type="range"].timeline::-webkit-slider-thumb { width: 8px; height: 30px; }
   input[type="range"].timeline::-moz-range-thumb { width: 8px; height: 30px; }
+  .seg button { min-height: 40px; }
+  select { padding: 8px; }
+}
+
+/* --- mobile UI polish: panels must never swallow the whole viewport, and the
+ * toolbar respects the notch/safe area --- */
+@media (max-width: 640px) {
+  .panel { max-height: 62dvh; overflow-y: auto; overscroll-behavior: contain; }
+  .toolbar { padding-top: max(6px, env(safe-area-inset-top)); }
 }
