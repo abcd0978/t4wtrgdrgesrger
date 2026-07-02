@@ -111,7 +111,26 @@ export default function App() {
   }, [status]);
   const [busy, setBusy] = React.useState(false);
 
-  const [settings, setSettings] = React.useState<RenderSettings>(DEFAULT_SETTINGS);
+  // Render settings persist across reloads (so quality presets stay applied
+  // and correctly highlighted). Session-only fields — clipping, crop box,
+  // wipe, derived values — reset to defaults on restore.
+  const [settings, setSettings] = React.useState<RenderSettings>(() => {
+    try {
+      const saved = JSON.parse(lsGet("renderSettings", "null"));
+      if (saved && typeof saved === "object") {
+        return {
+          ...DEFAULT_SETTINGS, ...saved,
+          clipAxis: -1, clipPos: 0, clipSign: 1,
+          cropOn: 0, cropMin: [0, 0, 0], cropMax: [0, 0, 0],
+          wipeOn: 0, wipePos: 0.5, lodDistWorld: 0,
+        };
+      }
+    } catch { /* corrupt storage -> defaults */ }
+    return DEFAULT_SETTINGS;
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem(LS + "renderSettings", JSON.stringify(settings)); } catch { /* ignore */ }
+  }, [settings]);
   const [showPanel, setShowPanel] = React.useState(false);
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
   const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
@@ -152,9 +171,12 @@ export default function App() {
   // can't keep up (and back up when there's headroom). Uncheck 자동 in
   // settings to pin a value manually.
   const nativeDpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
-  const [dprAuto, setDprAuto] = React.useState(true);
+  const [dprAuto, setDprAuto] = React.useState(() => lsGet("dprAuto", "1") === "1");
   const [autoDprValue, setAutoDprValue] = React.useState(nativeDpr);
-  const [dpr, setDpr] = React.useState(1.5); // manual value when auto is off
+  const [dpr, setDpr] = React.useState(() => {
+    const v = parseFloat(lsGet("dprManual", "1.5"));
+    return Number.isFinite(v) && v > 0 ? v : 1.5; // manual value when auto is off
+  });
   const [antialias, setAntialias] = React.useState(false);
   // Control sensitivities (persisted). Two knobs only: rotate and zoom, both
   // applying to mouse AND touch — the touch-specific attenuation is a fixed
@@ -189,8 +211,10 @@ export default function App() {
       localStorage.setItem(LS + "moveSens", String(moveSens));
       localStorage.setItem(LS + "minFps", String(minFps));
       localStorage.setItem(LS + "undoCapMB", String(undoCapMB));
+      localStorage.setItem(LS + "dprAuto", dprAuto ? "1" : "0");
+      localStorage.setItem(LS + "dprManual", String(dpr));
     } catch { /* ignore */ }
-  }, [rotateSens, zoomSens, moveSens, minFps, undoCapMB]);
+  }, [rotateSens, zoomSens, moveSens, minFps, undoCapMB, dprAuto, dpr]);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -236,7 +260,13 @@ export default function App() {
   const [videoRec, setVideoRec] = React.useState(false);
   const turntableTimer = React.useRef<number | null>(null);
   const [clipSweep, setClipSweep] = React.useState(false);
-  const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
+  const [renderFrac, setRenderFrac] = React.useState(() => {
+    const v = parseFloat(lsGet("renderFrac", "1"));
+    return Number.isFinite(v) && v > 0 && v <= 1 ? v : 1; // LOD: fraction of gaussians to draw
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem(LS + "renderFrac", String(renderFrac)); } catch { /* ignore */ }
+  }, [renderFrac]);
   const captureRef = React.useRef<((name: string) => void) | null>(null);
   const captureBlobRef = React.useRef<(() => Promise<Blob | null>) | null>(null);
   const fpsElRef = React.useRef<HTMLSpanElement | null>(null);
