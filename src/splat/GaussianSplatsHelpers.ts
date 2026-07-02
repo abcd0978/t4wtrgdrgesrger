@@ -21,15 +21,16 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     fogColor: new THREE.Color(1, 1, 1),
     fogNear: 0.0,
     fogFar: 1000.0,
-    // Tunable render settings (driven from the UI).
+    // Tunable render settings (driven from the UI; keep in sync with
+    // DEFAULT_SETTINGS in RenderSettings.ts).
     splatScale: 1.0,
-    minSplatPx: 2.0,
+    minSplatPx: 0.0,
     maxSplatPx: 1024.0,
-    blur: 0.3,
+    blur: 0.0,
     opacityScale: 1.0,
-    cullThreshold: 0.01,
+    cullThreshold: 0.0,
     falloffCutoff: 4.0,
-    alphaTest: 0.01,
+    alphaTest: 0.0,
     clipAxis: -1.0,
     clipPos: 0.0,
     clipSign: 1.0,

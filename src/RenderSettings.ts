@@ -16,15 +16,21 @@ export interface RenderSettings {
   clipSign: number; // which side to cut: +1 or -1
 }
 
+// Defaults match antimatter15/splat's (hardcoded) shader behaviour: no size
+// clamp, no dilation, and no culling — every gaussian is drawn and only the
+// exp falloff tail (radius² > 4) is discarded. The previous defaults
+// (minSplatPx 2, cullThreshold 0.01, alphaTest 0.01) dropped or dot-ified
+// small faint splats, which reads as a sparse/grainy surface — especially at
+// dpr 1, where screen-space covariances shrink and the cull bites harder.
 export const DEFAULT_SETTINGS: RenderSettings = {
   splatScale: 1.0,
-  minSplatPx: 2.0,
+  minSplatPx: 0.0,
   maxSplatPx: 1024.0,
-  blur: 0.3,
+  blur: 0.0,
   opacityScale: 1.0,
-  cullThreshold: 0.01,
+  cullThreshold: 0.0,
   falloffCutoff: 4.0,
-  alphaTest: 0.01,
+  alphaTest: 0.0,
   fadeSpeed: 2.0,
   clipAxis: -1,
   clipPos: 0,
