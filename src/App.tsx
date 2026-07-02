@@ -565,11 +565,7 @@ export default function App() {
       readCov6(ndv, b, cov); writeCov6(ndv, b, rotateCovariance(cov, R));
     }
     setBuffer(nb);
-    const nbounds = computeBounds(nb);
-    setBounds(nbounds);
-    // Re-aim the camera at the recentred scene.
-    const nc = center(nbounds), D = radius(nbounds) * 2.2 + 1;
-    camApiRef.current?.apply([nc[0] + D * 0.58, nc[1] - D * 0.58, nc[2] + D * 0.58], nc);
+    setBounds(computeBounds(nb));
     const tiltDeg = (Math.acos(dot) * 180) / Math.PI;
     setStatus(`자동 수평: 기울기 ${tiltDeg.toFixed(1)}° 보정 · 바닥→z0 · 원점 정렬 (undo 가능)`);
   }
