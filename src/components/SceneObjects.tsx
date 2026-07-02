@@ -632,17 +632,24 @@ export function RotateHandle({
 }
 
 /** Keep the felt control speeds constant everywhere.
- * - rotateSpeed pinned to 1 (no proximity-based slowdown).
+ * - rotateSpeed pinned (no proximity-based slowdown). Touch devices get a
+ *   lower constant: finger drags cover much more of the small screen than a
+ *   mouse does, so 1.0 feels twitchy on phones.
  * - zoomSpeed compensates OrbitControls' distance-proportional dolly step
- *   (∝ 1/dist, clamped) so wheel/pinch zoom feels the same at any range. */
+ *   (∝ 1/dist, clamped) so wheel/pinch zoom feels the same at any range; the
+ *   boost is capped lower on touch since pinch applies it exponentially. */
+const IS_COARSE_POINTER =
+  typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+
 export function ConstantControlSpeed({ sceneRadius }: { sceneRadius: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    controls.rotateSpeed = 1;
+    controls.rotateSpeed = IS_COARSE_POINTER ? 0.4 : 1;
     const dist = camera.position.distanceTo(controls.target);
-    controls.zoomSpeed = Math.min(30, Math.max(1, (sceneRadius || 1) / Math.max(dist, 1e-6)));
+    const boost = (sceneRadius || 1) / Math.max(dist, 1e-6);
+    controls.zoomSpeed = Math.min(IS_COARSE_POINTER ? 6 : 30, Math.max(1, boost));
   });
   return null;
 }
