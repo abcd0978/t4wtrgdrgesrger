@@ -2,6 +2,11 @@ import { FloatingPanel } from "./FloatingPanel";
 
 type Axis = 0 | 1 | 2;
 type WandMode = "both" | "space" | "color";
+
+// Touch devices get the selection panel collapsed by default — it's tall and
+// covers most of a phone screen; the title bar (with the count) stays visible.
+const IS_COARSE_POINTER =
+  typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 type GroupItem = { id: number; name: string; indices: number[]; hidden: boolean; color: string };
 
 /** Left panel: transform / colour / duplicate / hide / delete the current selection. */
@@ -26,7 +31,8 @@ export function SelectionPanel({
   onDuplicate: () => void; onHide: () => void; onIsolate: () => void; onDelete: () => void; onKeepOnly: () => void; onExportSel: () => void; onPivot: () => void;
 }) {
   return (
-    <FloatingPanel title={`선택 ${selectionSize.toLocaleString()}개`} onClose={onDeselect} style={{ top: 62, left: 10 }} width="min(214px, calc(100vw - 20px))">
+    <FloatingPanel title={`선택 ${selectionSize.toLocaleString()}개`} onClose={onDeselect} style={{ top: 62, left: 10 }} width="min(214px, calc(100vw - 20px))"
+      collapsible defaultCollapsed={IS_COARSE_POINTER}>
         <label className="row" title="더블클릭할 때마다 선택에 추가 (이미 선택된 점을 다시 클릭하면 해제) — 모바일에서 Shift 대신">
           <input type="checkbox" checked={addSel} onChange={(e) => setAddSel(e.target.checked)} /> ＋ 추가 선택 모드
         </label>

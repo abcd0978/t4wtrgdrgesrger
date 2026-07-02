@@ -18,24 +18,36 @@ export function useDragOffset() {
 /** A draggable floating panel (window-like): drag the title bar to move it, and
  * the title bar (with the close X) stays pinned at the top while the body
  * scrolls. `style` sets the initial anchor (top/left/right/bottom); dragging
- * adds a translate offset on top of that. */
-export function FloatingPanel({ title, onClose, style, width, className, children }: {
+ * adds a translate offset on top of that.
+ * `collapsible` adds a fold toggle to the title bar that hides the body —
+ * only the title bar remains (small screens especially). `defaultCollapsed`
+ * sets the initial state. */
+export function FloatingPanel({ title, onClose, style, width, className, collapsible, defaultCollapsed, children }: {
   title: React.ReactNode;
   onClose?: () => void;
   style?: React.CSSProperties;
   width?: string | number;
   className?: string;
+  collapsible?: boolean;
+  defaultCollapsed?: boolean;
   children: React.ReactNode;
 }) {
   const { off, startDrag } = useDragOffset();
+  const [collapsed, setCollapsed] = React.useState(!!defaultCollapsed);
   const baseTransform = (style?.transform as string) || "";
   return (
     <div className={"panel scroll" + (className ? " " + className : "")} style={{ ...style, width, transform: `${baseTransform} translate(${off.x}px, ${off.y}px)`.trim(), maxHeight: "calc(100dvh - 24px)" }}>
       <div className="panel-titlebar" onPointerDown={startDrag}>
-        <span className="panel-title">{title}</span>
+        <span className="panel-title" style={collapsible ? { cursor: "pointer" } : undefined}
+          onClick={collapsible ? () => setCollapsed((c) => !c) : undefined}>{title}</span>
+        {collapsible && (
+          <button className="ghost icon" onClick={() => setCollapsed((c) => !c)} onPointerDown={(e) => e.stopPropagation()} title={collapsed ? "펼치기" : "접기"}>
+            {collapsed ? "▸" : "▾"}
+          </button>
+        )}
         {onClose && <button className="ghost icon" onClick={onClose} onPointerDown={(e) => e.stopPropagation()}>✕</button>}
       </div>
-      <div className="panel-section">{children}</div>
+      {!collapsed && <div className="panel-section">{children}</div>}
     </div>
   );
 }
