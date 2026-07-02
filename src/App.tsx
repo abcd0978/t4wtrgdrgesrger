@@ -150,12 +150,24 @@ export default function App() {
     const v = parseFloat(lsGet("zoomSens", "1"));
     return Number.isFinite(v) && v > 0 ? v : 1;
   });
+  // Adaptive-DPR floor: resolution is shed only when fps falls below this.
+  const [minFps, setMinFps] = React.useState(() => {
+    const v = parseFloat(lsGet("minFps", "15"));
+    return Number.isFinite(v) && v >= 5 ? v : 15;
+  });
+  // Undo/redo snapshot memory budget (MB).
+  const [undoCapMB, setUndoCapMB] = React.useState(() => {
+    const v = parseInt(lsGet("undoCapMB", "384"));
+    return Number.isFinite(v) && v >= 64 ? v : 384;
+  });
   React.useEffect(() => {
     try {
       localStorage.setItem(LS + "rotateSens", String(rotateSens));
       localStorage.setItem(LS + "zoomSens", String(zoomSens));
+      localStorage.setItem(LS + "minFps", String(minFps));
+      localStorage.setItem(LS + "undoCapMB", String(undoCapMB));
     } catch { /* ignore */ }
-  }, [rotateSens, zoomSens]);
+  }, [rotateSens, zoomSens, minFps, undoCapMB]);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -376,13 +388,13 @@ export default function App() {
   // capped by BYTES, not just count — 30 full snapshots of a 6M-splat scene
   // would be ~5.7GB. Oldest entries drop first; the newest always survives.
   const MAX_STACK = 30;
-  const MAX_STACK_BYTES = 384 * 1048576;
+  const maxStackBytes = undoCapMB * 1048576;
   function trimStack(s: Uint32Array[]): Uint32Array[] {
     let bytes = 0, start = s.length;
     while (
       start > 0 &&
       s.length - start < MAX_STACK &&
-      (bytes + s[start - 1].byteLength <= MAX_STACK_BYTES || start === s.length)
+      (bytes + s[start - 1].byteLength <= maxStackBytes || start === s.length)
     ) {
       bytes += s[--start].byteLength;
     }
@@ -1577,7 +1589,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer: () => setSplatKey((k) => k + 1), showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1891,7 +1903,7 @@ export default function App() {
         <KeyboardFly sceneRadius={bounds ? radius(bounds) : 1} />
         <CanvasCapture captureRef={captureRef} captureBlobRef={captureBlobRef} canvasRef={canvasRef} download={downloadBlob} />
         <FpsMeter elRef={fpsElRef} />
-        <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} />
+        <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
         <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick}
           onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />

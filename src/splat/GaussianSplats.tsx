@@ -256,7 +256,7 @@ function SplatRendererImpl() {
     postToWorker({
       setBuffer: merged.gaussianBuffer,
       setGroupIndices: merged.groupIndices,
-      forceJsSort: FORCE_JS_SORT,
+      forceJsSort: FORCE_JS_SORT || settingsRef.current.jsSort === 1,
     });
 
     prevMergedRef.current = merged;

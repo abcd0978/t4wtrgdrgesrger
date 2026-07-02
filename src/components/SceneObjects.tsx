@@ -337,8 +337,8 @@ export function CanvasCapture({
 /** Quality-first adaptive resolution: render at native DPR and step down only
  * when measured fps can't keep up. Down fast (any bad 1s window), up slow
  * (3 consecutive good windows + cooldown) so it doesn't oscillate. */
-export function AdaptiveDpr({ enabled, value, setValue, max }: {
-  enabled: boolean; value: number; setValue: (v: number) => void; max: number;
+export function AdaptiveDpr({ enabled, value, setValue, max, minFps = 15 }: {
+  enabled: boolean; value: number; setValue: (v: number) => void; max: number; minFps?: number;
 }) {
   const acc = React.useRef({ frames: 0, t0: 0, lastChange: 0, goodWindows: 0 });
   useFrame(() => {
@@ -353,13 +353,13 @@ export function AdaptiveDpr({ enabled, value, setValue, max }: {
     a.t0 = now; a.frames = 0;
     if (dt > 2000 || document.hidden) return; // rAF was throttled (background tab)
     const cooldown = now - a.lastChange < 3000;
-    // Max quality by default: resolution is shed ONLY when fps drops below 15
-    // (actually unusable), and climbs back toward native whenever fps holds
-    // above 25 — so anything ≥15 fps renders at the highest sustainable DPR.
-    if (fps < 15 && value > 0.75 && !cooldown) {
+    // Max quality by default: resolution is shed ONLY below the user's minFps
+    // floor, and climbs back toward native whenever fps holds minFps+10 —
+    // so anything at/above the floor renders at the highest sustainable DPR.
+    if (fps < minFps && value > 0.75 && !cooldown) {
       a.lastChange = now; a.goodWindows = 0;
       setValue(Math.max(0.75, Math.round((value - 0.25) * 4) / 4));
-    } else if (fps > 25 && value < max) {
+    } else if (fps > minFps + 10 && value < max) {
       a.goodWindows++;
       if (a.goodWindows >= 2 && !cooldown) {
         a.lastChange = now; a.goodWindows = 0;

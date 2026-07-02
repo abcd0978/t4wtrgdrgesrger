@@ -23,6 +23,7 @@ export interface RenderSettings {
   shOn: number; // 1 = evaluate degree-1 SH (view-dependent colour) when the data has it
   lodDist: number; // distance LOD: 0 = off; else full detail up to this × scene radius, thinned beyond
   lodDistWorld: number; // derived (App): lodDist × scene radius in world units; shader uniform
+  jsSort: number; // 1 = force the pure-JS sorter instead of WASM (compatibility / debugging)
 }
 
 // Defaults match antimatter15/splat's (hardcoded) shader behaviour: no size
@@ -53,6 +54,7 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   shOn: 1,
   lodDist: 0,
   lodDistWorld: 0,
+  jsSort: 0,
 };
 
 export const RenderSettingsContext = createContext<RenderSettings>(DEFAULT_SETTINGS);

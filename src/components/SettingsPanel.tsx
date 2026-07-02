@@ -42,6 +42,9 @@ export interface SceneOpts {
   antialias: boolean; setAntialias: (v: boolean) => void; // toggling recreates the GL context
   rotateSens: number; setRotateSens: (v: number) => void; // rotate sensitivity (mouse + touch)
   zoomSens: number; setZoomSens: (v: number) => void; // zoom sensitivity (wheel + pinch)
+  minFps: number; setMinFps: (v: number) => void; // adaptive-DPR floor
+  undoCapMB: number; setUndoCapMB: (v: number) => void; // undo/redo snapshot budget
+  reloadRenderer: () => void; // remount the splat renderer (worker re-init)
   showAxes: boolean; setShowAxes: (v: boolean) => void;
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
@@ -59,7 +62,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
   const disabledLayer = { ...row, opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -98,6 +101,20 @@ export function SettingsPanel({
         title="0 = 끔. 카메라에서 이 거리(씬 반경 배수)까지는 전체 디테일, 그 너머는 가우시안 밀도를 거리 반비례로 낮추고 남은 것을 키워 보정 — 원거리 렌더 부하 절감" />
       <label style={row} title="스플랫에는 효과 없음 — 그리드/기즈모 선의 계단 완화. 켜면 화면이 잠깐 재생성됨">
         <input type="checkbox" checked={antialias} onChange={(e) => setAntialias(e.target.checked)} /> 안티앨리어싱 (MSAA) <span style={{ fontSize: 11, opacity: 0.6 }}>선·그리드용</span>
+      </label>
+      <label style={row} title="자동 해상도의 기준 fps — 이 아래로 떨어질 때만 해상도를 낮추고, +10 이상 유지되면 되돌림">
+        <span style={{ width: 84 }}>최소 fps</span>
+        <input type="range" min={5} max={60} step={5} value={minFps} onChange={(e) => setMinFps(parseInt(e.target.value))} style={{ flex: 1 }} />
+        <span style={{ width: 46, textAlign: "right" }}>{minFps}</span>
+      </label>
+      <label style={row} title="undo/redo 스냅샷이 차지할 수 있는 최대 메모리 — 큰 씬에서 편집이 많으면 낮추세요 (한도 초과 시 오래된 기록부터 삭제)">
+        <span style={{ width: 84 }}>undo 메모리</span>
+        <input type="range" min={64} max={1024} step={64} value={undoCapMB} onChange={(e) => setUndoCapMB(parseInt(e.target.value))} style={{ flex: 1 }} />
+        <span style={{ width: 46, textAlign: "right" }}>{undoCapMB}M</span>
+      </label>
+      <label style={row} title="WASM(SIMD) 대신 순수 JS 정렬 사용 — 호환성 문제 진단용, 켜면 씬이 잠깐 다시 초기화됨">
+        <input type="checkbox" checked={settings.jsSort === 1}
+          onChange={(e) => { setSettings((s) => ({ ...s, jsSort: e.target.checked ? 1 : 0 })); reloadRenderer(); }} /> JS 정렬 강제 <span style={{ fontSize: 11, opacity: 0.6 }}>호환성용</span>
       </label>
 
       <Sect>조작</Sect>
