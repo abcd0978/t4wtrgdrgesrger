@@ -8,7 +8,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation, eigenDecomposeSymmetric3 } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked } from "./lib/splatFile";
@@ -72,9 +72,8 @@ const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
-  ["더블클릭", "가우시안 1개 선택"],
+  ["더블클릭", "맨 앞 가우시안 선택 (Shift: 추가)"],
   ["길게 누르기 (0.5초)", "그 지점을 회전축(피벗)으로"],
-  ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
   ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
   ["왼쪽 패널", "이동·회전·스케일·색·복제·숨기기·격리·삭제"],
@@ -187,8 +186,6 @@ export default function App() {
 
   // selection + editing
   const [selection, setSelection] = React.useState<Set<number>>(new Set());
-  const [drag, setDrag] = React.useState<DragRect | null>(null);
-  const [selecting, setSelecting] = React.useState(false);
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
@@ -1886,15 +1883,6 @@ export default function App() {
         </div>
       )}
 
-      {drag && (
-        <div style={{
-          position: "absolute", zIndex: 2, pointerEvents: "none",
-          left: Math.min(drag.x0, drag.x1), top: Math.min(drag.y0, drag.y1),
-          width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0),
-          border: "1.5px solid var(--accent)", background: "rgba(255,139,61,0.15)", borderRadius: 4,
-        }} />
-      )}
-
       {settings.wipeOn === 1 && (
         <div
           style={{ position: "absolute", top: 0, bottom: 0, left: `calc(${settings.wipePos * 100}% - 10px)`, width: 20, zIndex: 5, cursor: "ew-resize", touchAction: "none" }}
@@ -1969,7 +1957,7 @@ export default function App() {
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
         <CameraBridge apiRef={camApiRef} />
-        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick}
+        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode} onMeasurePick={onMeasurePick}
           onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (

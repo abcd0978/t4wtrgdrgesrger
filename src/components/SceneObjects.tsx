@@ -159,18 +159,16 @@ export function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts })
   );
 }
 
-/** Double-click = single pick; double-click + drag = box select. Plain drag = camera.
- * Long-press (hold still ~0.5s) = set the rotation pivot (orbit target) to the
- * gaussian under the pointer. In measure mode a single double-click instead
- * reports the picked gaussian's world position (for the distance tool). */
+/** Double-click = point pick (front-most gaussian; Shift adds). Plain drag =
+ * camera. Long-press (hold still ~0.5s) = set the rotation pivot (orbit
+ * target) to the gaussian under the pointer. In measure mode a double-click
+ * instead reports the picked gaussian's world position (distance tool). */
 export function InputController({
-  bufferRef, selectionRef, setSelection, setDrag, setSelecting, measureMode, onMeasurePick, onSetPivot,
+  bufferRef, selectionRef, setSelection, measureMode, onMeasurePick, onSetPivot,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
   selectionRef: React.MutableRefObject<Set<number>>;
   setSelection: (s: Set<number>) => void;
-  setDrag: (d: DragRect | null) => void;
-  setSelecting: (b: boolean) => void;
   measureMode: boolean;
   onMeasurePick: (p: [number, number, number]) => void;
   onSetPivot?: (p: [number, number, number]) => void;
@@ -210,53 +208,15 @@ export function InputController({
       return best;
     }
 
-    function pick(x0: number, y0: number, x1: number, y1: number, additive: boolean, single: boolean) {
+    // Point pick: front-most gaussian under the cursor; Shift adds to the
+    // current selection. (Box/drag select was removed — piercing the whole
+    // scene made precise selection impossible.)
+    function pick(x0: number, y0: number, additive: boolean) {
       const buffer = bufferRef.current;
       if (!buffer) return;
       const out = additive ? new Set(selectionRef.current) : new Set<number>();
-      if (single) {
-        const best = pickNearest(x0, y0);
-        if (best >= 0) out.add(best);
-      } else {
-        // Box select, occlusion-aware: instead of selecting everything the
-        // rectangle pierces ("laser beam"), keep only the VISIBLE surface —
-        // the rect is split into screen cells, each cell records its nearest
-        // depth, and only gaussians within 8% of that front depth survive.
-        const { camera, w, h } = env.current;
-        const dv = new DataView(buffer.buffer);
-        const n = buffer.length / 8;
-        const v = new THREE.Vector3();
-        const minX = Math.min(x0, x1), maxX = Math.max(x0, x1), minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
-        const CELL = 24;
-        const cols = Math.max(1, Math.ceil(w / CELL));
-        const minDist = new Map<number, number>();
-        // Pass 1: nearest camera distance per cell.
-        for (let i = 0; i < n; i++) {
-          const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
-          v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
-          const camD = v.distanceTo(camera.position);
-          v.project(camera);
-          if (v.z < -1 || v.z > 1) continue;
-          const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
-          if (px < minX || px > maxX || py < minY || py > maxY) continue;
-          const cell = Math.floor(px / CELL) + Math.floor(py / CELL) * cols;
-          const cur = minDist.get(cell);
-          if (cur === undefined || camD < cur) minDist.set(cell, camD);
-        }
-        // Pass 2: keep only the front shell (re-projecting beats storing
-        // per-gaussian results — zero extra memory on multi-million scenes).
-        for (let i = 0; i < n; i++) {
-          const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
-          v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
-          const camD = v.distanceTo(camera.position);
-          v.project(camera);
-          if (v.z < -1 || v.z > 1) continue;
-          const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
-          if (px < minX || px > maxX || py < minY || py > maxY) continue;
-          const lim = minDist.get(Math.floor(px / CELL) + Math.floor(py / CELL) * cols);
-          if (lim !== undefined && camD <= lim * 1.08) out.add(i);
-        }
-      }
+      const best = pickNearest(x0, y0);
+      if (best >= 0) out.add(best);
       setSelection(out);
     }
 
@@ -279,11 +239,9 @@ export function InputController({
       cancelLp();
       const now = performance.now();
       if (now - lastUp < 300 && Math.hypot(e.clientX - lx, e.clientY - ly) < 12) {
-        // double-click: start box select, lock the camera directly
+        // double-click: point pick on release; lock the camera meanwhile
         sel = true; sx = e.clientX; sy = e.clientY;
         if (controls) controls.enabled = false;
-        setSelecting(true);
-        setDrag({ x0: sx, y0: sy, x1: sx, y1: sy });
       } else if (pointersDown === 1 && env.current.onSetPivot) {
         lpX = e.clientX; lpY = e.clientY;
         lpTimer = window.setTimeout(() => {
@@ -299,16 +257,17 @@ export function InputController({
     };
     const move = (e: PointerEvent) => {
       if (lpTimer !== null && Math.hypot(e.clientX - lpX, e.clientY - lpY) > 8) cancelLp();
-      if (sel) setDrag({ x0: sx, y0: sy, x1: e.clientX, y1: e.clientY });
     };
     const up = (e: PointerEvent) => {
       pointersDown = Math.max(0, pointersDown - 1);
       cancelLp();
       if (sel) {
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
-        if (env.current.measureMode) { if (dist < 5) measure(sx, sy); }
-        else pick(sx, sy, e.clientX, e.clientY, e.shiftKey, dist < 5);
-        sel = false; if (controls) controls.enabled = true; setSelecting(false); setDrag(null);
+        if (dist < 5) {
+          if (env.current.measureMode) measure(sx, sy);
+          else pick(sx, sy, e.shiftKey);
+        }
+        sel = false; if (controls) controls.enabled = true;
       }
       lastUp = performance.now(); lx = e.clientX; ly = e.clientY;
     };
@@ -322,7 +281,7 @@ export function InputController({
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [gl, controls, bufferRef, selectionRef, setSelection, setDrag, setSelecting]);
+  }, [gl, controls, bufferRef, selectionRef, setSelection]);
   return null;
 }
 
