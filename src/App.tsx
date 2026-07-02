@@ -39,6 +39,11 @@ const TEST_SCENES: { name: string; file: string; big?: boolean }[] = [
   { name: "Treehill", file: "treehill.splat", big: true },
 ];
 
+// First-visit scene: Train auto-loads when the URL doesn't specify a run.
+// Set this to pin the starting camera ({ p: position, t: look-at target });
+// null = default origin start. Read the live pose from 통계 > 카메라.
+const DEFAULT_TEST_VIEW: { p: [number, number, number]; t: [number, number, number] } | null = null;
+
 // Persist the load inputs (server url / run / mode / frames) across visits.
 const LS = "vwd:";
 const lsGet = (k: string, d: string) => { try { return localStorage.getItem(LS + k) ?? d; } catch { return d; } };
@@ -226,6 +231,26 @@ export default function App() {
   const selectionRef = React.useRef<Set<number>>(selection);
   selectionRef.current = selection;
 
+  // Live camera pose readout for the stats panel (polled only while open).
+  const [camPose, setCamPose] = React.useState<{ p: [number, number, number]; t: [number, number, number]; d: [number, number, number] } | null>(null);
+  React.useEffect(() => {
+    if (!showStats) return;
+    const id = setInterval(() => {
+      const v = camApiRef.current?.get();
+      if (!v) return;
+      const dx = v.t[0] - v.p[0], dy = v.t[1] - v.p[1], dz = v.t[2] - v.p[2];
+      const L = Math.hypot(dx, dy, dz) || 1;
+      setCamPose({ p: v.p, t: v.t, d: [dx / L, dy / L, dz / L] });
+    }, 250);
+    return () => clearInterval(id);
+  }, [showStats]);
+  function copyCamPose() {
+    if (!camPose) return;
+    const r3 = (a: number[]) => a.map((v) => Math.round(v * 1000) / 1000);
+    const text = JSON.stringify({ p: r3(camPose.p), t: r3(camPose.t) });
+    navigator.clipboard?.writeText(text).then(() => setStatus(`카메라 좌표 복사됨: ${text}`)).catch(() => setStatus(text));
+  }
+
   const [serverOk, setServerOk] = React.useState<boolean | null>(null);
   const [lastUpdate, setLastUpdate] = React.useState<string>("");
   React.useEffect(() => {
@@ -306,7 +331,15 @@ export default function App() {
     if (u.maxFrames) setMaxFrames(u.maxFrames);
     if (u.cam) pendingView.current = u.cam;
     if (u.sel) pendingSel.current = u.sel;
-    if (u.run) load({ host: u.host, runId: u.run, mode: u.mode, maxFrames: u.maxFrames });
+    if (u.run) {
+      load({ host: u.host, runId: u.run, mode: u.mode, maxFrames: u.maxFrames });
+    } else {
+      // No shared/run URL: greet with the Train demo instead of an empty
+      // "server unreachable" screen. (loadTestScene's sync prefix clears
+      // pendingView, so the pinned start view is set right after the call.)
+      loadTestScene(TEST_SCENES[0]);
+      if (DEFAULT_TEST_VIEW) pendingView.current = { p: DEFAULT_TEST_VIEW.p, t: DEFAULT_TEST_VIEW.t };
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live polling: fetch the manifest and append any new delta frames to the buffer.
@@ -1806,6 +1839,14 @@ export default function App() {
             )}
             {frameCum && (
               <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">새 가우시안</span><span className="num">+{(frameCum[frameIdx] - (frameIdx > 0 ? frameCum[frameIdx - 1] : 0)).toLocaleString()}</span></div>
+            )}
+            {camPose && (
+              <>
+                <hr className="divider" />
+                <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">카메라 위치</span><span className="num" style={{ fontSize: 11 }}>{camPose.p.map((v) => v.toFixed(2)).join(", ")}</span></div>
+                <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">카메라 방향</span><span className="num" style={{ fontSize: 11 }}>{camPose.d.map((v) => v.toFixed(2)).join(", ")}</span></div>
+                <button onClick={copyCamPose} title="현재 위치/타깃을 JSON으로 복사 (시작 카메라 지정용)">📋 카메라 좌표 복사</button>
+              </>
             )}
             <hr className="divider" />
             <Hist data={stats.opHist} label="불투명도 분포" sub="0 → 255" />
