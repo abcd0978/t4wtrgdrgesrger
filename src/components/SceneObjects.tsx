@@ -271,9 +271,10 @@ export function InputController({
  * cleared by compositing; re-render synchronously right before toBlob so the
  * pixels are guaranteed fresh. */
 export function CanvasCapture({
-  captureRef, canvasRef, download,
+  captureRef, captureBlobRef, canvasRef, download,
 }: {
   captureRef: React.MutableRefObject<((name: string) => void) | null>;
+  captureBlobRef?: React.MutableRefObject<(() => Promise<Blob | null>) | null>;
   canvasRef?: React.MutableRefObject<HTMLCanvasElement | null>;
   download: (blob: Blob, name: string) => void;
 }) {
@@ -285,9 +286,20 @@ export function CanvasCapture({
       gl.render(scene, camera);
       gl.domElement.toBlob((b) => { if (b) download(b, name); }, "image/png");
     };
+    if (captureBlobRef) {
+      captureBlobRef.current = () =>
+        new Promise<Blob | null>((resolve) => {
+          gl.render(scene, camera);
+          gl.domElement.toBlob((b) => resolve(b), "image/png");
+        });
+    }
     if (canvasRef) canvasRef.current = gl.domElement;
-    return () => { captureRef.current = null; if (canvasRef) canvasRef.current = null; };
-  }, [gl, scene, camera, download, canvasRef]);
+    return () => {
+      captureRef.current = null;
+      if (captureBlobRef) captureBlobRef.current = null;
+      if (canvasRef) canvasRef.current = null;
+    };
+  }, [gl, scene, camera, download, canvasRef, captureBlobRef]);
   return null;
 }
 
@@ -358,7 +370,7 @@ function catmull(p0: number, p1: number, p2: number, p3: number, u: number) {
 
 /** Interpolated camera pose at time `ms` along a path, using a Catmull-Rom
  * spline so it curves smoothly through the keyframes instead of cornering. */
-function poseAt(path: CamPose[], ms: number): CamPose | null {
+export function poseAt(path: CamPose[], ms: number): CamPose | null {
   if (path.length === 0) return null;
   if (ms <= path[0].ms) return path[0];
   const last = path[path.length - 1];

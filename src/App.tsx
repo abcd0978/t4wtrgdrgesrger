@@ -8,7 +8,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation, eigenDecomposeSymmetric3 } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, TouchTwistRotate, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, TouchTwistRotate, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked } from "./lib/splatFile";
@@ -193,6 +193,7 @@ export default function App() {
   const [clipSweep, setClipSweep] = React.useState(false);
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
+  const captureBlobRef = React.useRef<(() => Promise<Blob | null>) | null>(null);
   const fpsElRef = React.useRef<HTMLSpanElement | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const compareFileRef = React.useRef<HTMLInputElement>(null);
@@ -1373,6 +1374,54 @@ export default function App() {
     setAntialias(v);
   }
 
+  // Offline high-quality frame export: step the camera pose frame-by-frame,
+  // render + capture each PNG deterministically (independent of realtime fps),
+  // and download the sequence as a ZIP (30fps timing; ffmpeg-ready).
+  async function exportFramesZip(kind: "path" | "turntable") {
+    const cap = captureBlobRef.current, cam = camApiRef.current;
+    if (!buffer || !bounds || videoRec || !cap || !cam) return;
+    const FPS = 30;
+    const poses: { p: [number, number, number]; t: [number, number, number] }[] = [];
+    if (kind === "path") {
+      if (camPath.length < 2) { setStatus("녹화된 카메라 경로가 없음 (먼저 경로 녹화)"); return; }
+      const dur = camPath[camPath.length - 1].ms;
+      const frames = Math.min(450, Math.max(2, Math.ceil(dur * FPS)));
+      for (let f = 0; f < frames; f++) {
+        const p = poseAt(camPath, (f / (frames - 1)) * dur);
+        if (p) poses.push({ p: p.p, t: p.t });
+      }
+    } else {
+      // One full turn around the scene centre at the current radius/height.
+      const v = cam.get(); const c = center(bounds);
+      const rx = v.p[0] - c[0], ry = v.p[1] - c[1];
+      const frames = 240; // 8s @ 30fps
+      for (let f = 0; f < frames; f++) {
+        const a = (f / frames) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+        poses.push({ p: [c[0] + rx * ca - ry * sa, c[1] + rx * sa + ry * ca, v.p[2]], t: [c[0], c[1], c[2]] });
+      }
+    }
+    setBusy(true); setCamReplaying(false); setAutoOrbit(false); setTouring(false);
+    const restore = cam.get();
+    try {
+      const entries: { name: string; bytes: Uint8Array }[] = [];
+      for (let i = 0; i < poses.length; i++) {
+        cam.apply(poses[i].p, poses[i].t);
+        await new Promise((r) => requestAnimationFrame(r)); // settle controls + regular frame
+        const blob = await cap();
+        if (!blob) throw new Error("캡처 실패");
+        entries.push({ name: `frame_${String(i).padStart(4, "0")}.png`, bytes: new Uint8Array(await blob.arrayBuffer()) });
+        if (i % 10 === 0 || i === poses.length - 1) setStatus(`고품질 프레임 렌더 ${i + 1}/${poses.length}…`);
+      }
+      downloadBlob(makeNpz(entries), `${runId || "viser"}_${kind}_30fps_frames.zip`);
+      setStatus(`프레임 ${poses.length}장 ZIP 저장 (30fps) — ffmpeg -framerate 30 -i frame_%04d.png 으로 영상화`);
+    } catch (e) {
+      setStatus("프레임 내보내기 오류: " + (e as Error).message);
+    } finally {
+      cam.apply(restore.p, restore.t);
+      setBusy(false);
+    }
+  }
+
   // High-res screenshot: briefly pin DPR above the current effective value,
   // let it render, capture, then restore (including auto mode).
   function captureHiRes(scale: number) {
@@ -1640,6 +1689,11 @@ export default function App() {
               <button className="grow" onClick={exportTurntable} disabled={!buffer || videoRec}>🎠 턴테이블</button>
             </div>
             {videoRec && <button className="danger" onClick={stopVideoRecording}>■ 녹화 중지 &amp; 저장</button>}
+            <div className="row" style={{ gap: 6 }}>
+              <button className="grow" onClick={() => exportFramesZip("path")} disabled={camPath.length < 2 || videoRec || busy} title="경로를 프레임 단위로 렌더해 PNG 시퀀스로 — 실시간 fps와 무관한 고품질">🎞 경로 PNG</button>
+              <button className="grow" onClick={() => exportFramesZip("turntable")} disabled={!buffer || videoRec || busy} title="한 바퀴(8초·240프레임)를 프레임 단위로 렌더해 PNG 시퀀스로">🎞 턴테이블 PNG</button>
+            </div>
+            <span className="muted" style={{ fontSize: 11 }}>고품질 프레임 ZIP (30fps) — 렌더 버벅임과 무관, ffmpeg로 영상화</span>
             <hr className="divider" />
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="muted">북마크 (시점)</span>
@@ -1789,7 +1843,7 @@ export default function App() {
         {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}
         <KeyboardFly sceneRadius={bounds ? radius(bounds) : 1} />
         <TouchTwistRotate />
-        <CanvasCapture captureRef={captureRef} canvasRef={canvasRef} download={downloadBlob} />
+        <CanvasCapture captureRef={captureRef} captureBlobRef={captureBlobRef} canvasRef={canvasRef} download={downloadBlob} />
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} />
         <CameraBridge apiRef={camApiRef} />
