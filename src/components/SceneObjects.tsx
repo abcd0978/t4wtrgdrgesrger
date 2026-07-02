@@ -669,8 +669,10 @@ export function ConstantControlSpeed({ rotateSens = 1 }: { rotateSens?: number }
  * - Wheel / two-finger pinch = move FORWARD/BACK along the view direction —
  *   camera and orbit target translate together (exactly like WASD), so zoom
  *   never stalls at the orbit target and can pass through the scene.
- * - Two-finger twist = spin the camera's azimuth (turntable around world-up
- *   through the target) by the twist angle, map-app style.
+ * - Two-finger twist = ROLL around the screen axis (the view direction): the
+ *   scene rotates about the screen centre following the fingers, like
+ *   rotating a photo. Jumping to a preset view resets the horizon (those
+ *   paths re-set camera.up to world z).
  * OrbitControls' own dolly is disabled (enableZoom=false); its two-finger pan
  * still composes with these. */
 export function GestureControls({ sceneRadius, zoomSens = 1 }: { sceneRadius: number; zoomSens?: number }) {
@@ -733,7 +735,9 @@ export function GestureControls({ sceneRadius, zoomSens = 1 }: { sceneRadius: nu
         flyForward((dist - prevDist) * 0.0025 * (r || 1) * zs);
       }
       prevDist = dist;
-      // Twist = azimuth turntable.
+      // Twist = roll around the view (screen) axis. The camera sits on that
+      // axis, so only the up vector needs rotating; negative sign makes the
+      // scene follow the fingers (screen y grows downward).
       const a = angleOf();
       if (prevAngle !== null) {
         let d = a - prevAngle;
@@ -741,11 +745,8 @@ export function GestureControls({ sceneRadius, zoomSens = 1 }: { sceneRadius: nu
         else if (d < -Math.PI) d += 2 * Math.PI;
         const { camera: cam, controls: ctl } = ref.current;
         if (ctl && d !== 0) {
-          const c = Math.cos(d), s = Math.sin(d);
-          const t = ctl.target;
-          const vx = cam.position.x - t.x, vy = cam.position.y - t.y;
-          cam.position.x = t.x + vx * c - vy * s;
-          cam.position.y = t.y + vx * s + vy * c;
+          cam.getWorldDirection(fwd);
+          cam.up.applyAxisAngle(fwd, -d);
           ctl.update();
         }
       }
