@@ -306,14 +306,15 @@ export function AdaptiveDpr({ enabled, value, setValue, max }: {
     a.t0 = now; a.frames = 0;
     if (dt > 2000 || document.hidden) return; // rAF was throttled (background tab)
     const cooldown = now - a.lastChange < 3000;
-    // Quality first: only shed resolution when clearly struggling (<32 fps;
-    // 30-60 still feels fine, especially on mobile), recover above 55.
-    if (fps < 32 && value > 0.75 && !cooldown) {
+    // Max quality by default: resolution is shed ONLY when fps drops below 15
+    // (actually unusable), and climbs back toward native whenever fps holds
+    // above 25 — so anything ≥15 fps renders at the highest sustainable DPR.
+    if (fps < 15 && value > 0.75 && !cooldown) {
       a.lastChange = now; a.goodWindows = 0;
       setValue(Math.max(0.75, Math.round((value - 0.25) * 4) / 4));
-    } else if (fps > 55 && value < max) {
+    } else if (fps > 25 && value < max) {
       a.goodWindows++;
-      if (a.goodWindows >= 3 && !cooldown) {
+      if (a.goodWindows >= 2 && !cooldown) {
         a.lastChange = now; a.goodWindows = 0;
         setValue(Math.min(max, value + 0.25));
       }
