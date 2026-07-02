@@ -164,13 +164,17 @@ export function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts })
  * target) to the gaussian under the pointer. In measure mode a double-click
  * instead reports the picked gaussian's world position (distance tool). */
 export function InputController({
-  bufferRef, selectionRef, setSelection, measureMode, addMode = false, onMeasurePick, onSetPivot,
+  bufferRef, selectionRef, setSelection, measureMode, polyMode = false, onPolyPick, polySelectRef, onMeasurePick, onSetPivot,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
   selectionRef: React.MutableRefObject<Set<number>>;
   setSelection: (s: Set<number>) => void;
   measureMode: boolean;
-  addMode?: boolean; // mobile-friendly Shift substitute: picks accumulate (re-pick removes)
+  polyMode?: boolean; // double-clicks add polygon vertices instead of picking
+  onPolyPick?: (x: number, y: number) => void;
+  /** Selects gaussians inside a screen-space polygon (front surface only);
+   * returns the resulting selection size. */
+  polySelectRef?: React.MutableRefObject<((pts: { x: number; y: number }[], additive: boolean) => number) | null>;
   onMeasurePick: (p: [number, number, number]) => void;
   onSetPivot?: (p: [number, number, number]) => void;
 }) {
@@ -178,8 +182,8 @@ export function InputController({
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
-  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, addMode, onMeasurePick, onSetPivot });
-  env.current = { camera, w: size.width, h: size.height, measureMode, addMode, onMeasurePick, onSetPivot };
+  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, polyMode, onPolyPick, onMeasurePick, onSetPivot });
+  env.current = { camera, w: size.width, h: size.height, measureMode, polyMode, onPolyPick, onMeasurePick, onSetPivot };
 
   React.useEffect(() => {
     const el = gl.domElement;
@@ -209,10 +213,8 @@ export function InputController({
       return best;
     }
 
-    // Point pick: front-most gaussian under the cursor. Shift (or the 추가
-    // 모드 toggle, for touch) accumulates; re-picking an already-selected
-    // gaussian in additive mode removes it. (Box/drag select was removed —
-    // piercing the whole scene made precise selection impossible.)
+    // Point pick: front-most gaussian under the cursor; Shift accumulates
+    // (re-picking removes). For area selection use polygon mode.
     function pick(x0: number, y0: number, additive: boolean) {
       const buffer = bufferRef.current;
       if (!buffer) return;
@@ -224,6 +226,67 @@ export function InputController({
       }
       setSelection(out);
     }
+
+    // Polygon select: gaussians whose screen projection falls inside the
+    // user-drawn polygon — but only the VISIBLE front surface, not everything
+    // the shape pierces: the polygon is split into 24px screen cells, each
+    // records its nearest depth, and only gaussians within 8% of that front
+    // depth survive. Two passes (re-projecting) keep extra memory at zero.
+    function inPoly(px: number, py: number, pts: { x: number; y: number }[]): boolean {
+      let inside = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        if (
+          pts[i].y > py !== pts[j].y > py &&
+          px < ((pts[j].x - pts[i].x) * (py - pts[i].y)) / (pts[j].y - pts[i].y) + pts[i].x
+        ) inside = !inside;
+      }
+      return inside;
+    }
+    function polySelect(pts: { x: number; y: number }[], additive: boolean): number {
+      const buffer = bufferRef.current;
+      if (!buffer || pts.length < 3) return selectionRef.current.size;
+      const { camera, w, h } = env.current;
+      const dv = new DataView(buffer.buffer);
+      const n = buffer.length / 8;
+      const v = new THREE.Vector3();
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      }
+      const CELL = 24;
+      const cols = Math.max(1, Math.ceil(w / CELL));
+      const minDist = new Map<number, number>();
+      // Pass 1: nearest camera distance per cell inside the polygon.
+      for (let i = 0; i < n; i++) {
+        const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
+        v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+        const camD = v.distanceTo(camera.position);
+        v.project(camera);
+        if (v.z < -1 || v.z > 1) continue;
+        const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
+        if (px < minX || px > maxX || py < minY || py > maxY || !inPoly(px, py, pts)) continue;
+        const cell = Math.floor(px / CELL) + Math.floor(py / CELL) * cols;
+        const cur = minDist.get(cell);
+        if (cur === undefined || camD < cur) minDist.set(cell, camD);
+      }
+      // Pass 2: keep the front shell.
+      const out = additive ? new Set(selectionRef.current) : new Set<number>();
+      for (let i = 0; i < n; i++) {
+        const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
+        v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+        const camD = v.distanceTo(camera.position);
+        v.project(camera);
+        if (v.z < -1 || v.z > 1) continue;
+        const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
+        if (px < minX || px > maxX || py < minY || py > maxY || !inPoly(px, py, pts)) continue;
+        const lim = minDist.get(Math.floor(px / CELL) + Math.floor(py / CELL) * cols);
+        if (lim !== undefined && camD <= lim * 1.08) out.add(i);
+      }
+      setSelection(out);
+      return out.size;
+    }
+    if (polySelectRef) polySelectRef.current = polySelect;
 
     function measure(x0: number, y0: number) {
       const buffer = bufferRef.current;
@@ -269,8 +332,9 @@ export function InputController({
       if (sel) {
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
         if (dist < 5) {
-          if (env.current.measureMode) measure(sx, sy);
-          else pick(sx, sy, e.shiftKey || env.current.addMode);
+          if (env.current.polyMode) env.current.onPolyPick?.(sx, sy);
+          else if (env.current.measureMode) measure(sx, sy);
+          else pick(sx, sy, e.shiftKey);
         }
         sel = false; if (controls) controls.enabled = true;
       }
@@ -282,11 +346,12 @@ export function InputController({
     window.addEventListener("pointerup", up);
     return () => {
       cancelLp();
+      if (polySelectRef) polySelectRef.current = null;
       el.removeEventListener("pointerdown", down);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [gl, controls, bufferRef, selectionRef, setSelection]);
+  }, [gl, controls, bufferRef, selectionRef, setSelection, polySelectRef]);
   return null;
 }
 

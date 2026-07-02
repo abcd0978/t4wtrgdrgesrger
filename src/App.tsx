@@ -72,8 +72,8 @@ const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
-  ["더블클릭", "맨 앞 가우시안 선택 (Shift 또는 ＋추가 모드: 누적)"],
-  ["🪄 연결 영역", "찍은 점에서 색·공간으로 이어진 부분을 번져가며 선택"],
+  ["더블클릭", "맨 앞 가우시안 선택 (Shift: 누적)"],
+  ["⬠ 다각형 선택", "도구 ▾ → 점을 찍어 도형을 만들고 그 안을 선택"],
   ["길게 누르기 (0.5초)", "그 지점을 회전축(피벗)으로"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
   ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
@@ -194,9 +194,12 @@ export default function App() {
   // selection + editing
   const [selection, setSelection] = React.useState<Set<number>>(new Set());
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
-  const [addSel, setAddSel] = React.useState(false); // 추가 선택 모드 (모바일용 Shift 대체)
-  const [wandTol, setWandTol] = React.useState(40); // 연결 영역 선택 색 허용치
-  const [wandMode, setWandMode] = React.useState<"both" | "space" | "color">("both"); // 매직 완드 기준
+  // Polygon select: screen-space vertices picked by double-click; gaussians
+  // inside the (front-surface filtered) polygon get selected.
+  const [polyMode, setPolyMode] = React.useState(false);
+  const [polyPts, setPolyPts] = React.useState<{ x: number; y: number }[]>([]);
+  const [polyAdd, setPolyAdd] = React.useState(false);
+  const polySelectRef = React.useRef<((pts: { x: number; y: number }[], additive: boolean) => number) | null>(null);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -848,87 +851,19 @@ export default function App() {
   }
   function showAll() { setVis({ mode: "all", set: new Set() }); }
 
-  // Magic wand: expand from the current selection by the chosen criterion —
-  // "both" = colour gate + spatial 26-neighbourhood BFS (stops at colour
-  // boundaries and gaps), "space" = spatial connectivity only (grabs whole
-  // touching structures regardless of colour), "color" = colour similarity
-  // globally (no connectivity, like the colour filter but seeded from the
-  // picked points). Grid cell = scene radius / 120. No AI — geometry+colour.
-  function selectConnected() {
-    if (!buffer || !bounds || selection.size === 0) return;
-    const dv = viewOf(buffer);
-    const slots = buffer.length / 8;
-    const cell = Math.max(radius(bounds) / 120, 1e-9);
-    // Invertible packed cell key (per-axis span / cell < 1024 by construction).
-    const ox = Math.floor(bounds.min[0] / cell), oy = Math.floor(bounds.min[1] / cell), oz = Math.floor(bounds.min[2] / cell);
-    const keyOf = (x: number, y: number, z: number) =>
-      (Math.floor(x / cell) - ox) + (Math.floor(y / cell) - oy) * 1024 + (Math.floor(z / cell) - oz) * 1048576;
-    // Seed average colour.
-    let sr = 0, sg = 0, sb = 0;
-    for (const i of selection) {
-      const b = i * 32;
-      sr += dv.getUint8(b + 28); sg += dv.getUint8(b + 29); sb += dv.getUint8(b + 30);
-    }
-    sr /= selection.size; sg /= selection.size; sb /= selection.size;
-    const tol2 = wandTol * wandTol;
-    const useColor = wandMode !== "space";
-
-    if (wandMode === "color") {
-      // Colour only: global similarity, no connectivity.
-      const nextSel = new Set(selection);
-      for (let i = 0; i < slots; i++) {
-        const b = i * 32;
-        if (dv.getUint8(b + 31) === 0) continue;
-        const dr = dv.getUint8(b + 28) - sr, dg = dv.getUint8(b + 29) - sg, db = dv.getUint8(b + 30) - sb;
-        if (dr * dr + dg * dg + db * db <= tol2) nextSel.add(i);
-      }
-      setSelection(nextSel);
-      setStatus(`🪄 색 유사: ${nextSel.size.toLocaleString()}개 선택 (허용치 ${wandTol})`);
-      return;
-    }
-
-    // Bucket candidate gaussians by cell (colour-gated unless space-only).
-    const grid = new Map<number, number[]>();
-    for (let i = 0; i < slots; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      if (useColor) {
-        const dr = dv.getUint8(b + 28) - sr, dg = dv.getUint8(b + 29) - sg, db = dv.getUint8(b + 30) - sb;
-        if (dr * dr + dg * dg + db * db > tol2) continue;
-      }
-      const k = keyOf(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
-      let arr = grid.get(k);
-      if (!arr) grid.set(k, (arr = []));
-      arr.push(i);
-    }
-    // BFS over cells from the seed cells.
-    const visited = new Set<number>();
-    let frontier: number[] = [];
-    for (const i of selection) {
-      const b = i * 32;
-      const k = keyOf(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
-      if (!visited.has(k)) { visited.add(k); frontier.push(k); }
-    }
-    while (frontier.length > 0) {
-      const next: number[] = [];
-      for (const k of frontier) {
-        const ix = k & 1023, iy = (k >> 10) & 1023, iz = k >> 20;
-        for (let dx = -1; dx <= 1; dx++)
-          for (let dy2 = -1; dy2 <= 1; dy2++)
-            for (let dz2 = -1; dz2 <= 1; dz2++) {
-              const kn = (ix + dx) + (iy + dy2) * 1024 + (iz + dz2) * 1048576;
-              if (!visited.has(kn) && grid.has(kn)) { visited.add(kn); next.push(kn); }
-            }
-      }
-      frontier = next;
-    }
-    const nextSel = new Set(selection);
-    for (const k of visited) {
-      const arr = grid.get(k);
-      if (arr) for (const i of arr) nextSel.add(i);
-    }
-    setSelection(nextSel);
-    setStatus(`🪄 연결 영역 (${wandMode === "space" ? "공간만" : "색+공간"}): ${nextSel.size.toLocaleString()}개 선택`);
+  // --- polygon select mode helpers ---
+  function togglePolyMode() {
+    setPolyMode((m) => {
+      if (!m) { setMeasureMode(false); setMeasurePts([]); }
+      setPolyPts([]);
+      return !m;
+    });
+  }
+  function runPolySelect() {
+    if (polyPts.length < 3) return;
+    const n = polySelectRef.current?.(polyPts, polyAdd) ?? 0;
+    setPolyPts([]);
+    setStatus(`⬠ 다각형 선택: ${n.toLocaleString()}개`);
   }
 
   // Invert: select every visible gaussian that isn't currently selected.
@@ -1699,8 +1634,9 @@ export default function App() {
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
-        <Dropdown label={`도구${measureMode || showFilter || showGroups || showCompare || compares.length ? " ●" : ""}`} className="menu-only">
-          <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); }} disabled={!buffer}>측정</button>
+        <Dropdown label={`도구${measureMode || polyMode || showFilter || showGroups || showCompare || compares.length ? " ●" : ""}`} className="menu-only">
+          <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); setPolyMode(false); setPolyPts([]); }} disabled={!buffer}>측정</button>
+          <button className={polyMode ? "active" : ""} onClick={togglePolyMode} disabled={!buffer} title="점을 찍어 도형을 만들고, 도형 안의 (보이는) 가우시안을 선택">⬠ 다각형 선택</button>
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{compares.length ? ` (${compares.length})` : ""}</button>
@@ -1741,7 +1677,6 @@ export default function App() {
         <SelectionPanel
           selectionSize={selection.size}
           onDeselect={() => setSelection(new Set())} onInvert={invertSelection} onGrow={growSelection}
-          addSel={addSel} setAddSel={setAddSel} wandTol={wandTol} setWandTol={setWandTol} wandMode={wandMode} setWandMode={setWandMode} onWand={selectConnected}
           moveStep={moveStep} setMoveStep={setMoveStep} onMove={moveSelection}
           rotStep={rotStep} setRotStep={setRotStep} onRotate={rotateSelection}
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
@@ -1749,6 +1684,33 @@ export default function App() {
           onDuplicate={duplicateSelection} onHide={hideSelection} onIsolate={isolateSelection} onDelete={deleteSelection} onKeepOnly={keepOnlySelection} onExportSel={exportSelectionPly}
           onPivot={() => { if (buffer && selection.size > 0) { camApiRef.current?.setTarget(selCenter(buffer, selection)); setStatus("회전축 → 선택 중심"); } }}
         />
+      )}
+
+      {polyMode && (
+        <FloatingPanel title="⬠ 다각형 선택" onClose={() => { setPolyMode(false); setPolyPts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(340px, calc(100vw - 20px))">
+          <span className="muted" style={{ fontSize: 12 }}>더블클릭으로 꼭짓점을 찍으세요 ({polyPts.length}점 · 3점 이상이면 실행 가능)</span>
+          <label className="row"><input type="checkbox" checked={polyAdd} onChange={(e) => setPolyAdd(e.target.checked)} /> 기존 선택에 추가</label>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="grow" onClick={() => setPolyPts((p) => p.slice(0, -1))} disabled={polyPts.length === 0}>↩ 마지막 점</button>
+            <button className="grow ghost" onClick={() => setPolyPts([])} disabled={polyPts.length === 0}>지우기</button>
+          </div>
+          <button className="accent" onClick={runPolySelect} disabled={polyPts.length < 3}>✓ 도형 안 선택</button>
+          <span className="muted" style={{ fontSize: 11 }}>보이는 표면만 선택됨 (뒤에 가려진 것은 제외)</span>
+        </FloatingPanel>
+      )}
+
+      {polyMode && polyPts.length > 0 && (
+        <svg style={{ position: "absolute", inset: 0, zIndex: 4, pointerEvents: "none", width: "100%", height: "100%" }}>
+          {polyPts.length >= 2 && (
+            <polygon
+              points={polyPts.map((p) => `${p.x},${p.y}`).join(" ")}
+              fill={polyPts.length >= 3 ? "rgba(255,139,61,0.14)" : "none"}
+              stroke="var(--accent)" strokeWidth={1.5} strokeDasharray="6 4" />
+          )}
+          {polyPts.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r={5} fill={i === 0 ? "var(--accent)" : "rgba(255,139,61,0.85)"} stroke="#fff" strokeWidth={1.5} />
+          ))}
+        </svg>
       )}
 
       {measureMode && (
@@ -2051,7 +2013,9 @@ export default function App() {
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
         <CameraBridge apiRef={camApiRef} />
-        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode} addMode={addSel} onMeasurePick={onMeasurePick}
+        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode}
+          polyMode={polyMode} onPolyPick={(x, y) => setPolyPts((p) => [...p, { x, y }])} polySelectRef={polySelectRef}
+          onMeasurePick={onMeasurePick}
           onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (
