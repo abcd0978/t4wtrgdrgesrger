@@ -536,29 +536,21 @@ export function CameraPath({ recording, playing, loop, recRef, path, seekMs, onP
 
 /** Auto-orbit: slowly revolve the camera around the target about world-up (z),
  * like a turntable, for hands-free review / recording. */
-/** Auto-orbit (공전) around the world-up axis. `aroundPivot` picks the centre:
- * true = the user-chosen rotation pivot (orbit target); false = the WORLD
- * origin — the whole camera rig (position + target) revolves around the
- * world z-axis, so the scene spins about its reference origin. */
-export function AutoOrbit({ enabled, speed, aroundPivot = true }: { enabled: boolean; speed: number; aroundPivot?: boolean }) {
+/** Auto-orbit (공전): revolve the camera around the current rotation pivot
+ * (the orbit target — set it onto a gaussian with long-press or 선택을
+ * 회전축으로). The camera↔pivot distance is the orbit radius, preserved
+ * exactly (horizontal turntable about the world-up axis through the pivot). */
+export function AutoOrbit({ enabled, speed }: { enabled: boolean; speed: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
   useFrame((_, delta) => {
     if (!enabled || !controls) return;
+    const t = controls.target;
+    const dx = camera.position.x - t.x, dy = camera.position.y - t.y;
     const a = speed * Math.min(delta, 0.05);
     const c = Math.cos(a), s = Math.sin(a);
-    const t = controls.target;
-    if (aroundPivot) {
-      const dx = camera.position.x - t.x, dy = camera.position.y - t.y;
-      camera.position.x = t.x + dx * c - dy * s;
-      camera.position.y = t.y + dx * s + dy * c;
-    } else {
-      const px = camera.position.x, py = camera.position.y;
-      camera.position.x = px * c - py * s;
-      camera.position.y = px * s + py * c;
-      const tx = t.x, ty = t.y;
-      t.set(tx * c - ty * s, tx * s + ty * c, t.z);
-    }
+    camera.position.x = t.x + dx * c - dy * s;
+    camera.position.y = t.y + dx * s + dy * c;
     controls.update();
   });
   return null;

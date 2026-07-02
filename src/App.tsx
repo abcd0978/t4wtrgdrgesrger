@@ -225,9 +225,6 @@ export default function App() {
   const [polyMode, setPolyMode] = React.useState(false);
   const [polyPts, setPolyPts] = React.useState<[number, number, number][]>([]);
   const [polyAdd, setPolyAdd] = React.useState(false);
-  // True once the user explicitly picked a rotation pivot (long-press or
-  // 선택을 회전축으로); 공전 then revolves around it instead of the world origin.
-  const [pivotSet, setPivotSet] = React.useState(false);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -331,7 +328,7 @@ export default function App() {
     setBusy(true); setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set());
     setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
-    setLive(false); liveCtxRef.current = null; setPivotSet(false);
+    setLive(false); liveCtxRef.current = null;
     try {
       let final: Uint32Array | null = null;
       if (_mode === "snapshot") {
@@ -1014,7 +1011,7 @@ export default function App() {
     setBusy(true); setStatus(`reading ${file.name}…`);
     setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
-    setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null; setPivotSet(false);
+    setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
       const isSplat = /\.splat$/i.test(file.name);
       const { buffer: b, frameCum: fc, sh1: sh } = isSplat
@@ -1035,7 +1032,7 @@ export default function App() {
     setBusy(true); setStatus(`${scene.name} 다운로드 중…`);
     setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
-    setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null; setPivotSet(false);
+    setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     setLive(false); liveCtxRef.current = null;
     try {
       let lastPct = -1;
@@ -1160,7 +1157,7 @@ export default function App() {
     setBuffer(b); setSh1(null); setBounds(computeBounds(b));
     originalBuffer.current = b; // shared, not copied — edits are copy-on-write
     setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
-    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]); setPivotSet(false);
+    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
     setSplatKey((k) => k + 1); // remount so the new scene inits + sorts without a camera move
   }
   // Make a compare overlay the scene; the old main is pushed back as an overlay.
@@ -1623,7 +1620,7 @@ export default function App() {
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
           editColor={editColor} setEditColor={setEditColor} editAlpha={editAlpha} setEditAlpha={setEditAlpha} onApplyColor={applyColorOpacity}
           onDuplicate={duplicateSelection} onHide={hideSelection} onIsolate={isolateSelection} onDelete={deleteSelection} onKeepOnly={keepOnlySelection} onExportSel={exportSelectionPly}
-          onPivot={() => { if (buffer && selection.size > 0) { camApiRef.current?.setTarget(selCenter(buffer, selection)); setPivotSet(true); setStatus("회전축 → 선택 중심"); } }}
+          onPivot={() => { if (buffer && selection.size > 0) { camApiRef.current?.setTarget(selCenter(buffer, selection)); setStatus("회전축 → 선택 중심"); } }}
         />
       )}
 
@@ -1932,7 +1929,7 @@ export default function App() {
         <OrbitControls makeDefault enableDamping={false} enableZoom={false} enableRotate={false} />
         <ConstantControlSpeed moveSens={moveSens} />
         <GestureControls sceneRadius={bounds ? radius(bounds) : 1} zoomSens={zoomSens} rotateSens={rotateSens} />
-        <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} aroundPivot={pivotSet} />
+        <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
         <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => { setCamReplaying(false); if (videoRecRef.current) videoRecRef.current.stop(); }} />
         {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}
         <KeyboardFly sceneRadius={bounds ? radius(bounds) : 1} moveSens={moveSens} />
@@ -1943,7 +1940,7 @@ export default function App() {
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode}
           polyMode={polyMode} onPolyPick={(p) => setPolyPts((prev) => [...prev, p])}
           onMeasurePick={onMeasurePick}
-          onSetPivot={(p) => { camApiRef.current?.setTarget(p); setPivotSet(true); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
+          onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (
           <>
