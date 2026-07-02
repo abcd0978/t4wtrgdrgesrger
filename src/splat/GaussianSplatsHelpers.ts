@@ -41,6 +41,7 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     wipePos: 0.5,
     shEnable: 0.0,
     textureSh: null as THREE.DataTexture | null,
+    lodDist: 0.0,
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
   // highp float is critical on mobile: Apple GPUs really evaluate mediump as
@@ -90,6 +91,10 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
   // Degree-1 spherical harmonics (view-dependent colour), optional.
   uniform float shEnable;
   uniform usampler2D textureSh;
+
+  // Distance LOD: beyond this camera distance (world units; 0 = off) gaussians
+  // are stochastically thinned with the survivors enlarged to keep coverage.
+  uniform float lodDist;
 
   out vec4 vRgba;
   out vec2 vPosition;
@@ -147,6 +152,17 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     vec4 c_cam = T_camera_group * vec4(center, 1);
     if (-c_cam.z < near || -c_cam.z > far)
       return;
+
+    // Distance LOD: keep a 1/d fraction of gaussians past lodDist (stable
+    // golden-ratio hash of the gaussian id, so the kept set doesn't flicker),
+    // and enlarge the survivors so the surface coverage stays filled.
+    float lodBoost = 1.0;
+    if (lodDist > 0.0 && -c_cam.z > lodDist) {
+      float keep = max(lodDist / -c_cam.z, 0.05);
+      if (fract(float(sortedIndex) * 0.6180339887498949) > keep)
+        return;
+      lodBoost = 1.0 / keep;
+    }
     vec4 pos2d = projectionMatrixCustom * c_cam;
     float clip = 1.1 * pos2d.w;
     if (pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip)
@@ -186,9 +202,10 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     );
     mat3 A = J * mat3(T_camera_group);
     mat3 cov_proj = A * cov3d * transpose(A);
-    float diag1 = cov_proj[0][0] + blur;
-    float offDiag = cov_proj[0][1];
-    float diag2 = cov_proj[1][1] + blur;
+    // lodBoost scales the projected AREA by 1/keep so thinned regions stay covered.
+    float diag1 = cov_proj[0][0] * lodBoost + blur;
+    float offDiag = cov_proj[0][1] * lodBoost;
+    float diag2 = cov_proj[1][1] * lodBoost + blur;
 
     // Eigendecomposition.
     float mid = 0.5 * (diag1 + diag2);

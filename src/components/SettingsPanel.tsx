@@ -94,6 +94,8 @@ export function SettingsPanel({
       </label>
       <NumSlider label="정렬 임계값" k="sortThreshold" min={0} max={0.05} step={0.001} settings={settings} setSettings={setSettings}
         title="카메라가 이만큼 회전해야 재정렬 (0 = 항상 정렬, 높을수록 빠르지만 회전 시 번쩍일 수 있음)" />
+      <NumSlider label="거리 LOD" k="lodDist" min={0} max={2} step={0.05} settings={settings} setSettings={setSettings}
+        title="0 = 끔. 카메라에서 이 거리(씬 반경 배수)까지는 전체 디테일, 그 너머는 가우시안 밀도를 거리 반비례로 낮추고 남은 것을 키워 보정 — 원거리 렌더 부하 절감" />
       <label style={row} title="스플랫에는 효과 없음 — 그리드/기즈모 선의 계단 완화. 켜면 화면이 잠깐 재생성됨">
         <input type="checkbox" checked={antialias} onChange={(e) => setAntialias(e.target.checked)} /> 안티앨리어싱 (MSAA) <span style={{ fontSize: 11, opacity: 0.6 }}>선·그리드용</span>
       </label>

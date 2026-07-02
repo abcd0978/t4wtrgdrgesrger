@@ -21,6 +21,8 @@ export interface RenderSettings {
   wipeOn: number; // 1 = A/B wipe: main scene left of the divider, overlays right
   wipePos: number; // divider position as a screen fraction (0..1)
   shOn: number; // 1 = evaluate degree-1 SH (view-dependent colour) when the data has it
+  lodDist: number; // distance LOD: 0 = off; else full detail up to this × scene radius, thinned beyond
+  lodDistWorld: number; // derived (App): lodDist × scene radius in world units; shader uniform
 }
 
 // Defaults match antimatter15/splat's (hardcoded) shader behaviour: no size
@@ -49,6 +51,8 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   wipeOn: 0,
   wipePos: 0.5,
   shOn: 1,
+  lodDist: 0,
+  lodDistWorld: 0,
 };
 
 export const RenderSettingsContext = createContext<RenderSettings>(DEFAULT_SETTINGS);

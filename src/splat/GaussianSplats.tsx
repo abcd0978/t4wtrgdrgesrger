@@ -622,6 +622,7 @@ function SplatRendererImpl() {
     uniforms.wipeEnable.value = settings.wipeOn;
     uniforms.wipePos.value = settings.wipePos;
     uniforms.shEnable.value = meshProps.hasSh && settings.shOn ? 1.0 : 0.0;
+    uniforms.lodDist.value = settings.lodDistWorld;
     uniforms.transitionInState.value = Math.min(
       uniforms.transitionInState.value + delta * settings.fadeSpeed,
       1.0,

@@ -1306,6 +1306,13 @@ export default function App() {
 
   const effDpr = dprAuto ? autoDprValue : dpr;
 
+  // Derived render settings: the distance-LOD slider is in scene-radius units;
+  // the shader wants world units.
+  const settingsDerived = React.useMemo<RenderSettings>(() => ({
+    ...settings,
+    lodDistWorld: settings.lodDist > 0 && bounds ? settings.lodDist * radius(bounds) : 0,
+  }), [settings, bounds]);
+
   // Move the camera to look at the data centre from `dir` (centre -> camera).
   function setView(dir: [number, number, number]) {
     if (!bounds || !camApiRef.current) return;
@@ -1896,7 +1903,7 @@ export default function App() {
           </>
         )}
         {measurePts.length > 0 && <MeasureView points={measurePts} />}
-        <RenderSettingsContext.Provider value={settings}>
+        <RenderSettingsContext.Provider value={settingsDerived}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
           {display && bounds && (
             <>
