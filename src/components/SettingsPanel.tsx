@@ -243,7 +243,7 @@ export function SettingsPanel({
         <button style={{ flex: 1 }} onClick={() => setView([1, 0, 0])}>측면</button>
       </div>
       <button onClick={cameraToOrigin}>카메라를 축(원점) 위치로</button>
-      <span style={{ fontSize: 12, opacity: 0.7 }}>씬 회전 (기울기 미세 보정 — 자동은 도구 ▾ 자동 수평)</span>
+      <span style={{ fontSize: 12, opacity: 0.7 }}>씬 회전 (기울기 보정)</span>
       {(["X", "Y", "Z"] as const).map((ax, i) => (
         <div key={ax} className="seg">
           <span className="axis">{ax}</span>
