@@ -8,7 +8,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, FpsMeter, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchWithProgress } from "./lib/splatFile";
@@ -148,6 +148,7 @@ export default function App() {
   const [clipSweep, setClipSweep] = React.useState(false);
   const [renderFrac, setRenderFrac] = React.useState(1); // LOD: fraction of gaussians to draw
   const captureRef = React.useRef<((name: string) => void) | null>(null);
+  const fpsElRef = React.useRef<HTMLSpanElement | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const compareFileRef = React.useRef<HTMLInputElement>(null);
   const camApiRef = React.useRef<CameraApi | null>(null);
@@ -1096,6 +1097,7 @@ export default function App() {
         <button className="menu-only" onClick={() => setShowStats((v) => !v)}>통계</button>
         <button className="ghost icon menu-only" onClick={() => setShowHelp((v) => !v)}>?</button>
         <button className="ghost icon menu-only" onClick={() => setShowPanel((v) => !v)}>⚙</button>
+        <span ref={fpsElRef} className="num" style={{ whiteSpace: "nowrap", color: "#33e08a" }} title="렌더 fps · 평균 프레임 시간" />
         <span className="grow muted num" style={{ minWidth: 90, textAlign: "right" }}>{status}</span>
       </div>
 
@@ -1327,6 +1329,7 @@ export default function App() {
         {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}
         <KeyboardFly />
         <CanvasCapture captureRef={captureRef} canvasRef={canvasRef} download={downloadBlob} />
+        <FpsMeter elRef={fpsElRef} />
         <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}

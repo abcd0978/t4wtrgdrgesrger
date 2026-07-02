@@ -284,6 +284,25 @@ export function CanvasCapture({
   return null;
 }
 
+/** Live fps / frame-time readout. Counts real rendered frames via useFrame and
+ * writes into `elRef` twice a second — no React state, so the meter itself adds
+ * zero per-frame overhead. */
+export function FpsMeter({ elRef }: { elRef: React.MutableRefObject<HTMLElement | null> }) {
+  const acc = React.useRef({ frames: 0, t0: 0 });
+  useFrame(() => {
+    const a = acc.current;
+    const now = performance.now();
+    if (a.t0 === 0) { a.t0 = now; return; }
+    a.frames++;
+    const dt = now - a.t0;
+    if (dt >= 500) {
+      if (elRef.current) elRef.current.textContent = `${((a.frames * 1000) / dt).toFixed(0)} fps · ${(dt / a.frames).toFixed(1)} ms`;
+      a.t0 = now; a.frames = 0;
+    }
+  });
+  return null;
+}
+
 export type CamPose = { p: [number, number, number]; t: [number, number, number]; ms: number };
 
 // Catmull-Rom: smooth curve through p1,p2 using neighbours p0,p3 as tangents.
