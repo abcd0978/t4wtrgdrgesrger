@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./Rende
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, FpsMeter, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
-import { splatToPacked, fetchWithProgress } from "./lib/splatFile";
+import { splatToPacked, fetchSplatToPacked } from "./lib/splatFile";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
@@ -720,16 +720,17 @@ export default function App() {
     setLive(false); liveCtxRef.current = null;
     try {
       let lastPct = -1;
-      const data = await fetchWithProgress(TEST_SCENE_CDN + scene.file, (loaded, total) => {
+      // Streams the download straight into the packed buffer (records are
+      // converted as chunks arrive) — peak memory ~1x payload, so 200MB-class
+      // scenes load without killing the tab.
+      const b = await fetchSplatToPacked(TEST_SCENE_CDN + scene.file, true /* COLMAP y-down -> viewer z-up */, (loaded, total, splats) => {
         const mb = (loaded / 1048576).toFixed(1);
         const pct = total > 0 ? Math.floor((loaded / total) * 100) : -1;
         if (pct !== lastPct) { // throttle status updates to 1% steps
           lastPct = pct;
-          setStatus(pct >= 0 ? `${scene.name} 다운로드 ${pct}% (${mb} MB)` : `${scene.name} 다운로드 ${mb} MB…`);
+          setStatus(pct >= 0 ? `${scene.name} ${pct}% (${mb} MB · ${splats.toLocaleString()} splats)` : `${scene.name} ${mb} MB · ${splats.toLocaleString()} splats…`);
         }
       });
-      setStatus(`${scene.name} 변환 중…`);
-      const b = splatToPacked(data, true /* COLMAP y-down -> viewer z-up */);
       setRunId(scene.name);
       setBuffer(b); setBounds(computeBounds(b));
       originalBuffer.current = b.slice();

@@ -13,9 +13,10 @@ export function covarianceUpperTriFromMatrix(cov: Float32Array, n: number): Floa
   return out;
 }
 
-/** Σ = R diag(s²) Rᵀ upper-tri, from per-gaussian scale (s) and quaternion (wxyz). */
-export function covarianceFromScaleRotation(scales: Float32Array, wxyz: Float32Array, n: number): Float32Array {
-  const out = new Float32Array(n * 6);
+/** Σ = R diag(s²) Rᵀ upper-tri, from per-gaussian scale (s) and quaternion (wxyz).
+ * Pass `out` to reuse a scratch buffer (streaming converters call this per splat). */
+export function covarianceFromScaleRotation(scales: Float32Array, wxyz: Float32Array, n: number, out?: Float32Array): Float32Array {
+  out = out ?? new Float32Array(n * 6);
   for (let i = 0; i < n; i++) {
     const sx = scales[i * 3], sy = scales[i * 3 + 1], sz = scales[i * 3 + 2];
     let w = wxyz[i * 4], x = wxyz[i * 4 + 1], y = wxyz[i * 4 + 2], z = wxyz[i * 4 + 3];
