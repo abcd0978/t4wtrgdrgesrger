@@ -104,7 +104,7 @@ export function SettingsPanel({
         <input type="range" min={0.01} max={0.2} step={0.01} value={touchSens} onChange={(e) => setTouchSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
         <span style={{ width: 46, textAlign: "right" }}>{touchSens.toFixed(2)}</span>
       </label>
-      <label style={row} title="마우스 드래그 회전 민감도 (터치에는 터치 감도가 적용됨)">
+      <label style={row} title="드래그 회전 민감도 — 마우스·터치 모두 적용 (터치는 터치 감도 × 회전 감도)">
         <span style={{ width: 84 }}>회전 감도</span>
         <input type="range" min={0.1} max={2} step={0.05} value={rotateSens} onChange={(e) => setRotateSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
         <span style={{ width: 46, textAlign: "right" }}>{rotateSens.toFixed(2)}</span>

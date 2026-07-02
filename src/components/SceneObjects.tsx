@@ -649,13 +649,80 @@ export function ConstantControlSpeed({ sceneRadius, touchSens = 0.05, rotateSens
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    // Touch: one knob drives both rotate and the pinch cap. Desktop: 회전 감도.
-    controls.rotateSpeed = IS_COARSE_POINTER ? touchSens : rotateSens;
+    // 회전 감도 scales rotation on BOTH platforms; touch additionally applies
+    // its own factor (finger drags cover more of a small screen).
+    controls.rotateSpeed = rotateSens * (IS_COARSE_POINTER ? touchSens : 1);
     const dist = camera.position.distanceTo(controls.target);
     const boost = (sceneRadius || 1) / Math.max(dist, 1e-6);
     const zoomCap = IS_COARSE_POINTER ? Math.max(1.5, touchSens * 24) : 30;
     controls.zoomSpeed = Math.min(zoomCap, Math.max(1, boost));
   });
+  return null;
+}
+
+/** Two-finger twist gesture: rotating two touching fingers spins the camera's
+ * azimuth (turntable around the world-up axis through the orbit target) by the
+ * twist angle, map-app style — the scene follows the fingers. Runs alongside
+ * OrbitControls' own two-finger dolly/pan, so pinch+twist combine naturally. */
+export function TouchTwistRotate() {
+  const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
+  const ref = React.useRef({ camera, controls });
+  ref.current = { camera, controls };
+
+  React.useEffect(() => {
+    const el = gl.domElement;
+    const touches = new Map<number, { x: number; y: number }>();
+    let prevAngle: number | null = null;
+    const angleOf = () => {
+      const [a, b] = [...touches.values()];
+      return Math.atan2(b.y - a.y, b.x - a.x);
+    };
+    const down = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      prevAngle = touches.size === 2 ? angleOf() : null;
+    };
+    const move = (e: PointerEvent) => {
+      if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size !== 2) return;
+      const a = angleOf();
+      if (prevAngle !== null) {
+        let d = a - prevAngle;
+        if (d > Math.PI) d -= 2 * Math.PI;
+        else if (d < -Math.PI) d += 2 * Math.PI;
+        const { camera: cam, controls: ctl } = ref.current;
+        if (ctl && d !== 0) {
+          // Screen y grows downward, so the visual twist is -d; rotate the
+          // camera around world-up so the scene appears to follow the fingers.
+          const c = Math.cos(d), s = Math.sin(d);
+          const t = ctl.target;
+          const vx = cam.position.x - t.x, vy = cam.position.y - t.y;
+          cam.position.x = t.x + vx * c - vy * s;
+          cam.position.y = t.y + vx * s + vy * c;
+          ctl.update();
+        }
+      }
+      prevAngle = a;
+    };
+    const up = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touches.delete(e.pointerId);
+      prevAngle = touches.size === 2 ? angleOf() : null;
+    };
+    el.addEventListener("pointerdown", down);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      el.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [gl]);
   return null;
 }
 
