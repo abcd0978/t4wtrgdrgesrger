@@ -164,12 +164,13 @@ export function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts })
  * target) to the gaussian under the pointer. In measure mode a double-click
  * instead reports the picked gaussian's world position (distance tool). */
 export function InputController({
-  bufferRef, selectionRef, setSelection, measureMode, onMeasurePick, onSetPivot,
+  bufferRef, selectionRef, setSelection, measureMode, addMode = false, onMeasurePick, onSetPivot,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
   selectionRef: React.MutableRefObject<Set<number>>;
   setSelection: (s: Set<number>) => void;
   measureMode: boolean;
+  addMode?: boolean; // mobile-friendly Shift substitute: picks accumulate (re-pick removes)
   onMeasurePick: (p: [number, number, number]) => void;
   onSetPivot?: (p: [number, number, number]) => void;
 }) {
@@ -177,8 +178,8 @@ export function InputController({
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
-  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, onMeasurePick, onSetPivot });
-  env.current = { camera, w: size.width, h: size.height, measureMode, onMeasurePick, onSetPivot };
+  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, addMode, onMeasurePick, onSetPivot });
+  env.current = { camera, w: size.width, h: size.height, measureMode, addMode, onMeasurePick, onSetPivot };
 
   React.useEffect(() => {
     const el = gl.domElement;
@@ -208,15 +209,19 @@ export function InputController({
       return best;
     }
 
-    // Point pick: front-most gaussian under the cursor; Shift adds to the
-    // current selection. (Box/drag select was removed — piercing the whole
-    // scene made precise selection impossible.)
+    // Point pick: front-most gaussian under the cursor. Shift (or the 추가
+    // 모드 toggle, for touch) accumulates; re-picking an already-selected
+    // gaussian in additive mode removes it. (Box/drag select was removed —
+    // piercing the whole scene made precise selection impossible.)
     function pick(x0: number, y0: number, additive: boolean) {
       const buffer = bufferRef.current;
       if (!buffer) return;
       const out = additive ? new Set(selectionRef.current) : new Set<number>();
       const best = pickNearest(x0, y0);
-      if (best >= 0) out.add(best);
+      if (best >= 0) {
+        if (additive && out.has(best)) out.delete(best);
+        else out.add(best);
+      }
       setSelection(out);
     }
 
@@ -265,7 +270,7 @@ export function InputController({
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
         if (dist < 5) {
           if (env.current.measureMode) measure(sx, sy);
-          else pick(sx, sy, e.shiftKey);
+          else pick(sx, sy, e.shiftKey || env.current.addMode);
         }
         sel = false; if (controls) controls.enabled = true;
       }

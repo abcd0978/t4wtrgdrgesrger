@@ -72,7 +72,8 @@ const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
-  ["더블클릭", "맨 앞 가우시안 선택 (Shift: 추가)"],
+  ["더블클릭", "맨 앞 가우시안 선택 (Shift 또는 ＋추가 모드: 누적)"],
+  ["🪄 연결 영역", "찍은 점에서 색·공간으로 이어진 부분을 번져가며 선택"],
   ["길게 누르기 (0.5초)", "그 지점을 회전축(피벗)으로"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
   ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
@@ -193,6 +194,8 @@ export default function App() {
   // selection + editing
   const [selection, setSelection] = React.useState<Set<number>>(new Set());
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
+  const [addSel, setAddSel] = React.useState(false); // 추가 선택 모드 (모바일용 Shift 대체)
+  const [wandTol, setWandTol] = React.useState(40); // 연결 영역 선택 색 허용치
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -843,6 +846,70 @@ export default function App() {
     setVis({ mode: "isolate", set: new Set(selection) });
   }
   function showAll() { setVis({ mode: "all", set: new Set() }); }
+
+  // Magic wand: flood-fill from the current selection through space + colour.
+  // Candidates = gaussians whose colour is within `wandTol` of the seed
+  // average; connectivity = 26-neighbourhood BFS over a coarse grid
+  // (scene radius / 120), so the selection stops at colour boundaries and
+  // spatial gaps. No AI — geometry + colour only.
+  function selectConnected() {
+    if (!buffer || !bounds || selection.size === 0) return;
+    const dv = viewOf(buffer);
+    const slots = buffer.length / 8;
+    const cell = Math.max(radius(bounds) / 120, 1e-9);
+    // Invertible packed cell key (per-axis span / cell < 1024 by construction).
+    const ox = Math.floor(bounds.min[0] / cell), oy = Math.floor(bounds.min[1] / cell), oz = Math.floor(bounds.min[2] / cell);
+    const keyOf = (x: number, y: number, z: number) =>
+      (Math.floor(x / cell) - ox) + (Math.floor(y / cell) - oy) * 1024 + (Math.floor(z / cell) - oz) * 1048576;
+    // Seed average colour.
+    let sr = 0, sg = 0, sb = 0;
+    for (const i of selection) {
+      const b = i * 32;
+      sr += dv.getUint8(b + 28); sg += dv.getUint8(b + 29); sb += dv.getUint8(b + 30);
+    }
+    sr /= selection.size; sg /= selection.size; sb /= selection.size;
+    const tol2 = wandTol * wandTol;
+    // Bucket colour-matching gaussians by cell.
+    const grid = new Map<number, number[]>();
+    for (let i = 0; i < slots; i++) {
+      const b = i * 32;
+      if (dv.getUint8(b + 31) === 0) continue;
+      const dr = dv.getUint8(b + 28) - sr, dg = dv.getUint8(b + 29) - sg, db = dv.getUint8(b + 30) - sb;
+      if (dr * dr + dg * dg + db * db > tol2) continue;
+      const k = keyOf(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+      let arr = grid.get(k);
+      if (!arr) grid.set(k, (arr = []));
+      arr.push(i);
+    }
+    // BFS over cells from the seed cells.
+    const visited = new Set<number>();
+    let frontier: number[] = [];
+    for (const i of selection) {
+      const b = i * 32;
+      const k = keyOf(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+      if (!visited.has(k)) { visited.add(k); frontier.push(k); }
+    }
+    while (frontier.length > 0) {
+      const next: number[] = [];
+      for (const k of frontier) {
+        const ix = k & 1023, iy = (k >> 10) & 1023, iz = k >> 20;
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy2 = -1; dy2 <= 1; dy2++)
+            for (let dz2 = -1; dz2 <= 1; dz2++) {
+              const kn = (ix + dx) + (iy + dy2) * 1024 + (iz + dz2) * 1048576;
+              if (!visited.has(kn) && grid.has(kn)) { visited.add(kn); next.push(kn); }
+            }
+      }
+      frontier = next;
+    }
+    const nextSel = new Set(selection);
+    for (const k of visited) {
+      const arr = grid.get(k);
+      if (arr) for (const i of arr) nextSel.add(i);
+    }
+    setSelection(nextSel);
+    setStatus(`🪄 연결 영역: ${nextSel.size.toLocaleString()}개 선택 (허용치 ${wandTol})`);
+  }
 
   // Invert: select every visible gaussian that isn't currently selected.
   function invertSelection() {
@@ -1654,6 +1721,7 @@ export default function App() {
         <SelectionPanel
           selectionSize={selection.size}
           onDeselect={() => setSelection(new Set())} onInvert={invertSelection} onGrow={growSelection}
+          addSel={addSel} setAddSel={setAddSel} wandTol={wandTol} setWandTol={setWandTol} onWand={selectConnected}
           moveStep={moveStep} setMoveStep={setMoveStep} onMove={moveSelection}
           rotStep={rotStep} setRotStep={setRotStep} onRotate={rotateSelection}
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
@@ -1963,7 +2031,7 @@ export default function App() {
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
         <CameraBridge apiRef={camApiRef} />
-        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode} onMeasurePick={onMeasurePick}
+        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode} addMode={addSel} onMeasurePick={onMeasurePick}
           onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (

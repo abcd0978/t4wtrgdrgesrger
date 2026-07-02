@@ -6,6 +6,7 @@ type GroupItem = { id: number; name: string; indices: number[]; hidden: boolean;
 /** Left panel: transform / colour / duplicate / hide / delete the current selection. */
 export function SelectionPanel({
   selectionSize, onDeselect, onInvert, onGrow,
+  addSel, setAddSel, wandTol, setWandTol, onWand,
   moveStep, setMoveStep, onMove,
   rotStep, setRotStep, onRotate,
   onScaleUniform, onScaleAxis,
@@ -14,6 +15,8 @@ export function SelectionPanel({
 }: {
   selectionSize: number;
   onDeselect: () => void; onInvert: () => void; onGrow: () => void;
+  addSel: boolean; setAddSel: (v: boolean) => void;
+  wandTol: number; setWandTol: (v: number) => void; onWand: () => void;
   moveStep: number; setMoveStep: (v: number) => void; onMove: (dx: number, dy: number, dz: number) => void;
   rotStep: number; setRotStep: (v: number) => void; onRotate: (axis: Axis, deg: number) => void;
   onScaleUniform: (f: number) => void; onScaleAxis: (sx: number, sy: number, sz: number) => void;
@@ -22,10 +25,18 @@ export function SelectionPanel({
 }) {
   return (
     <FloatingPanel title={`선택 ${selectionSize.toLocaleString()}개`} onClose={onDeselect} style={{ top: 62, left: 10 }} width="min(214px, calc(100vw - 20px))">
+        <label className="row" title="더블클릭할 때마다 선택에 추가 (이미 선택된 점을 다시 클릭하면 해제) — 모바일에서 Shift 대신">
+          <input type="checkbox" checked={addSel} onChange={(e) => setAddSel(e.target.checked)} /> ＋ 추가 선택 모드
+        </label>
         <div className="row">
           <button className="grow" onClick={onInvert}>선택 반전</button>
           <button className="grow" onClick={onGrow} title="선택 영역(박스)을 채워 확장">확장</button>
         </div>
+        <button onClick={onWand} title="선택한 점에서 색이 비슷하고 공간적으로 이어진 가우시안으로 번져가며 선택 (매직 완드)">🪄 연결 영역 선택</button>
+        <label className="row muted" title="연결 영역 선택의 색 허용치 — 높을수록 넓게 번짐">허용치
+          <input type="range" className="grow" min={5} max={120} step={5} value={wandTol} onChange={(e) => setWandTol(parseInt(e.target.value))} />
+          <span className="num" style={{ width: 34, textAlign: "right" }}>{wandTol}</span>
+        </label>
         <button onClick={onPivot} title="선택의 중심을 카메라 회전축(궤도 타깃)으로">🎯 선택을 회전축으로</button>
 
         <label className="row muted">이동
