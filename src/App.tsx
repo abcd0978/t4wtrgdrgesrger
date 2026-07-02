@@ -99,6 +99,14 @@ export default function App() {
   const [sh1, setSh1] = React.useState<Uint32Array | null>(null);
   const [bounds, setBounds] = React.useState<Bounds | null>(null);
   const [status, setStatus] = React.useState("idle");
+  // The status toast fades out a few seconds after the last message.
+  const [statusVisible, setStatusVisible] = React.useState(false);
+  React.useEffect(() => {
+    if (!status) return;
+    setStatusVisible(true);
+    const id = setTimeout(() => setStatusVisible(false), 5000);
+    return () => clearTimeout(id);
+  }, [status]);
   const [busy, setBusy] = React.useState(false);
 
   const [settings, setSettings] = React.useState<RenderSettings>(DEFAULT_SETTINGS);
@@ -1616,8 +1624,8 @@ export default function App() {
         <button className="menu-only" onClick={() => setShowStats((v) => !v)}>통계</button>
         <button className="ghost icon menu-only" onClick={() => setShowHelp((v) => !v)}>?</button>
         <button className="ghost icon menu-only" onClick={() => setShowPanel((v) => !v)}>⚙</button>
+        <span className="grow" />
         <span ref={fpsElRef} className="num" style={{ whiteSpace: "nowrap", color: "#33e08a" }} title="렌더 fps · 평균 프레임 시간" />
-        <span className="grow muted num" style={{ minWidth: 90, textAlign: "right" }}>{status}</span>
       </div>
 
       {showPanel && (
@@ -1907,6 +1915,19 @@ export default function App() {
         >
           <div style={{ position: "absolute", left: 9, top: 0, bottom: 0, width: 2, background: "var(--accent)" }} />
           <div className="panel" style={{ position: "absolute", top: "50%", left: -22, transform: "translateY(-50%)", padding: "4px 8px", fontSize: 11, whiteSpace: "nowrap", pointerEvents: "none" }}>◂ A · B ▸</div>
+        </div>
+      )}
+
+      {status && status !== "idle" && (
+        <div className="num" style={{
+          position: "absolute", left: "50%", transform: "translateX(-50%)",
+          bottom: timelineVisible ? 118 : 14, zIndex: 7, pointerEvents: "none",
+          background: "rgba(0, 0, 0, 0.55)", color: "#e8e8e8", padding: "5px 12px",
+          borderRadius: 8, fontSize: 12, maxWidth: "min(72vw, 560px)",
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          opacity: statusVisible ? 1 : 0, transition: "opacity 0.6s",
+        }}>
+          {status}
         </div>
       )}
 
