@@ -631,46 +631,18 @@ export function RotateHandle({
   );
 }
 
-/** Scale OrbitControls rotate speed by how close the camera is to actual content
- * (nearest gaussian, sub-sampled), not the orbit target — so rotation stays calm
- * whenever you're near the data, however you got there (zoom, fly, or teleport).
- * Falls back to camera↔target distance when there's no buffer.
- *
- * Zoom is the opposite: OrbitControls' dolly step shrinks with distance to the
- * target, so zooming crawls near objects. Compensate with zoomSpeed ∝ 1/dist
- * (clamped) so the felt zoom speed stays the same everywhere. */
-export function AdaptiveRotateSpeed({
-  sceneRadius, bufferRef,
-}: {
-  sceneRadius: number;
-  bufferRef: React.MutableRefObject<Uint32Array | null>;
-}) {
+/** Keep the felt control speeds constant everywhere.
+ * - rotateSpeed pinned to 1 (no proximity-based slowdown).
+ * - zoomSpeed compensates OrbitControls' distance-proportional dolly step
+ *   (∝ 1/dist, clamped) so wheel/pinch zoom feels the same at any range. */
+export function ConstantControlSpeed({ sceneRadius }: { sceneRadius: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    const buf = bufferRef.current;
-    let dist = camera.position.distanceTo(controls.target);
-    if (buf) {
-      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-      const n = buf.length / 8;
-      const step = Math.max(1, Math.floor(n / 2000));
-      const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
-      let min2 = Infinity;
-      for (let i = 0; i < n; i += step) {
-        const b = i * 32;
-        if (dv.getUint8(b + 31) === 0) continue;
-        const dx = dv.getFloat32(b, true) - cx, dy = dv.getFloat32(b + 4, true) - cy, dz = dv.getFloat32(b + 8, true) - cz;
-        const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < min2) min2 = d2;
-      }
-      if (min2 < Infinity) dist = Math.sqrt(min2);
-    }
-    controls.rotateSpeed = Math.min(1, Math.max(0.1, dist / (sceneRadius || 1)));
-    // Constant felt zoom speed: the dolly step is ∝ camera↔target distance, so
-    // boost zoomSpeed as the target gets close (wheel and pinch both benefit).
-    const targetDist = camera.position.distanceTo(controls.target);
-    controls.zoomSpeed = Math.min(30, Math.max(1, (sceneRadius || 1) / Math.max(targetDist, 1e-6)));
+    controls.rotateSpeed = 1;
+    const dist = camera.position.distanceTo(controls.target);
+    controls.zoomSpeed = Math.min(30, Math.max(1, (sceneRadius || 1) / Math.max(dist, 1e-6)));
   });
   return null;
 }
