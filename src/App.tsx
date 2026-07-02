@@ -87,7 +87,10 @@ export default function App() {
   const [showMap, setShowMap] = React.useState(true);
   const [showGrid, setShowGrid] = React.useState(true);
   const [grid, setGrid] = React.useState<GridOpts>({ color: "#999999", divisions: 20, dashSize: 0.25, gapSize: 0.18 });
-  const [dpr, setDpr] = React.useState(1.5);
+  // Splatting is fill-rate bound (translucent quad overdraw); dpr 1 renders
+  // ~55% fewer pixels than 1.5. Raise it in the settings panel if you want
+  // sharper output on hi-dpi displays.
+  const [dpr, setDpr] = React.useState(1);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -1243,7 +1246,11 @@ export default function App() {
         </div>
       )}
 
-      <Canvas dpr={dpr} gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+      {/* antialias off: MSAA does nothing for splats (alpha-blended quads) and
+          costs fill-rate. preserveDrawingBuffer off: skips the per-frame
+          backbuffer copy; CanvasCapture re-renders right before reading pixels
+          instead, and captureStream (video export) grabs frames as they draw. */}
+      <Canvas dpr={dpr} gl={{ antialias: false, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
         {bounds && <AdaptiveRotateSpeed sceneRadius={radius(bounds)} bufferRef={bufferRef} />}

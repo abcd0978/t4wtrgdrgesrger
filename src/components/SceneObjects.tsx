@@ -259,8 +259,10 @@ export function InputController({
 }
 
 /** Exposes a canvas->PNG capture fn via captureRef and the canvas element via
- * canvasRef (for video recording). Needs `gl`, so lives inside Canvas; Canvas
- * must use preserveDrawingBuffer or toBlob comes back blank. */
+ * canvasRef (for video recording). Needs `gl`, so lives inside Canvas. The
+ * Canvas runs without preserveDrawingBuffer (perf), so the backbuffer may be
+ * cleared by compositing; re-render synchronously right before toBlob so the
+ * pixels are guaranteed fresh. */
 export function CanvasCapture({
   captureRef, canvasRef, download,
 }: {
@@ -269,12 +271,16 @@ export function CanvasCapture({
   download: (blob: Blob, name: string) => void;
 }) {
   const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
   React.useEffect(() => {
-    captureRef.current = (name) =>
+    captureRef.current = (name) => {
+      gl.render(scene, camera);
       gl.domElement.toBlob((b) => { if (b) download(b, name); }, "image/png");
+    };
     if (canvasRef) canvasRef.current = gl.domElement;
     return () => { captureRef.current = null; if (canvasRef) canvasRef.current = null; };
-  }, [gl, download, canvasRef]);
+  }, [gl, scene, camera, download, canvasRef]);
   return null;
 }
 

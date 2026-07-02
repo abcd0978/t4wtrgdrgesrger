@@ -17,12 +17,22 @@ export type SorterWorkerIncoming =
   | {
       setTz_camera_groups: Float32Array;
     }
+  | {
+      // Consumed index buffer sent back from the main thread for reuse, so
+      // steady-state sorting allocates nothing (no per-sort .slice() copy).
+      recycleBuffer: Uint32Array;
+    }
   | { close: true };
 
 {
   let sorter: any = null;
   let Tz_camera_groups: Float32Array | null = null;
   let sortRunning = false;
+  // Pool of index buffers returned by the main thread after it copied them
+  // into the geometry attribute. Transferred back and forth, so at steady
+  // state the worker ping-pongs between two buffers instead of allocating
+  // numGaussians * 4 bytes on every sort.
+  const recycledBuffers: Uint32Array[] = [];
   const throttledSort = () => {
     if (sorter === null || Tz_camera_groups === null) {
       setTimeout(throttledSort, 1);
@@ -33,12 +43,15 @@ export type SorterWorkerIncoming =
     sortRunning = true;
     const lastView = Tz_camera_groups;
 
-    // Important: we clone the output so we can transfer the buffer to the main
-    // thread. Compared to relying on postMessage for copying, this reduces
-    // backlog artifacts.
-    const sortedIndices = (
-      sorter.sort(Tz_camera_groups) as Uint32Array
-    ).slice();
+    // Important: we copy the output (into a recycled buffer when one fits) so
+    // we can transfer it to the main thread. Compared to relying on
+    // postMessage for copying, this reduces backlog artifacts.
+    const result = sorter.sort(Tz_camera_groups) as Uint32Array;
+    let sortedIndices = recycledBuffers.pop();
+    if (sortedIndices === undefined || sortedIndices.length !== result.length) {
+      sortedIndices = new Uint32Array(result.length);
+    }
+    sortedIndices.set(result);
 
     // @ts-ignore
     self.postMessage({ sortedIndices: sortedIndices }, [sortedIndices.buffer]);
@@ -46,12 +59,10 @@ export type SorterWorkerIncoming =
     setTimeout(() => {
       sortRunning = false;
       if (Tz_camera_groups === null) return;
-      if (
-        !lastView.every(
-          // Cast is needed because of closure...
-          (val, i) => val === (Tz_camera_groups as Float32Array)[i],
-        )
-      ) {
+      // Each setTz message carries a fresh Float32Array, so a reference check
+      // is enough to detect "camera moved while we were sorting" (the main
+      // thread already thresholds what it sends; no element-wise scan needed).
+      if (lastView !== Tz_camera_groups) {
         throttledSort();
       }
     }, 0);
@@ -83,6 +94,9 @@ export type SorterWorkerIncoming =
       // Update object transforms.
       Tz_camera_groups = data.setTz_camera_groups;
       throttledSort();
+    } else if ("recycleBuffer" in data) {
+      // Keep a small pool; stale sizes are filtered at reuse time.
+      if (recycledBuffers.length < 2) recycledBuffers.push(data.recycleBuffer);
     } else if ("close" in data) {
       // Done!
       self.close();

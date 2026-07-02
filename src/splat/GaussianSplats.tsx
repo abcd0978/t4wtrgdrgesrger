@@ -229,6 +229,11 @@ function SplatRendererImpl() {
           meshPropsRef.current.sortedIndexAttribute.needsUpdate = true;
         }
       }
+      // Hand the buffer back to the worker for reuse (transfer, zero-copy):
+      // the attribute made its own copy above, so we don't need it anymore.
+      (e.target as Worker).postMessage({ recycleBuffer: sortedIndices }, [
+        sortedIndices.buffer,
+      ]);
     };
 
     // Send initial buffer to worker.
@@ -340,6 +345,9 @@ function SplatRendererImpl() {
   const prevRowMajorT_camera_groupsRef = React.useRef<Float32Array>(
     new Float32Array(0),
   );
+  // Tz values at the time of the LAST sort request (not the last frame), so
+  // slow continuous motion still accumulates past the threshold and re-sorts.
+  const lastSortTzRef = React.useRef<Float32Array>(new Float32Array(0));
   const prevVisiblesRef = React.useRef<boolean[]>([]);
 
   // Update Tz_camera_groups size if numGroups changed.
@@ -487,17 +495,44 @@ function SplatRendererImpl() {
       );
 
       if (groupsMovedWrtCam) {
-        // Gaussians need to be re-sorted.
+        // Gaussians need to be re-sorted -- but only when the view actually
+        // rotated / translated enough to change the depth order. Sorting on
+        // every float change made camera drags re-sort (and re-upload the
+        // index buffer) in a continuous loop. Following antimatter15's
+        // heuristic: skip the sort while the view-direction dot product stays
+        // within 0.01 of the last-sorted direction; a depth-translation term
+        // (relative to the group's distance) covers WASD-style flying.
         if (blockingSort && SorterRef.current !== null) {
+          // Blocking sorts are for exact one-off renders; never skip.
           const sortedIndices = SorterRef.current.sort(
             Tz_camera_groups,
           ) as Uint32Array;
           meshProps.sortedIndexAttribute.set(sortedIndices);
           meshProps.sortedIndexAttribute.needsUpdate = true;
+          if (lastSortTzRef.current.length !== Tz_camera_groups.length)
+            lastSortTzRef.current = new Float32Array(Tz_camera_groups.length);
+          lastSortTzRef.current.set(Tz_camera_groups);
         } else {
-          postToWorker({
-            setTz_camera_groups: Tz_camera_groups,
-          });
+          const lastSortTz = lastSortTzRef.current;
+          let sortNeeded = lastSortTz.length !== Tz_camera_groups.length;
+          for (let g = 0; !sortNeeded && g * 4 < Tz_camera_groups.length; g++) {
+            const i = g * 4;
+            const dot =
+              Tz_camera_groups[i] * lastSortTz[i] +
+              Tz_camera_groups[i + 1] * lastSortTz[i + 1] +
+              Tz_camera_groups[i + 2] * lastSortTz[i + 2];
+            const dtz = Math.abs(Tz_camera_groups[i + 3] - lastSortTz[i + 3]);
+            if (Math.abs(dot - 1) > 0.01 || dtz > 0.01 * (1.0 + Math.abs(lastSortTz[i + 3])))
+              sortNeeded = true;
+          }
+          if (sortNeeded) {
+            postToWorker({
+              setTz_camera_groups: Tz_camera_groups,
+            });
+            if (lastSortTzRef.current.length !== Tz_camera_groups.length)
+              lastSortTzRef.current = new Float32Array(Tz_camera_groups.length);
+            lastSortTzRef.current.set(Tz_camera_groups);
+          }
         }
       }
       if (groupsMovedWrtCam || visibilitiesChanged) {
