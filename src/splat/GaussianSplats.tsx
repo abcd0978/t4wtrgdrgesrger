@@ -22,15 +22,6 @@
  * between multiple splat objects.
  */
 
-import MakeSorterModuleFactory from "./WasmSorter/Sorter.mjs";
-// Import WASM as base64 URL for inlining - avoids import.meta.url issues with blob URLs.
-import SorterWasmUrl from "./WasmSorter/Sorter.wasm?url";
-
-// Fetch WASM binary and pass to Emscripten module to avoid import.meta.url issues.
-const SorterModulePromise = fetch(SorterWasmUrl)
-  .then((response) => response.arrayBuffer())
-  .then((wasmBinary) => MakeSorterModuleFactory({ wasmBinary }));
-
 // Diagnostic escape hatch: append ?jssort to the URL to force the worker's
 // pure-JS sorter (bypasses the SIMD WASM module entirely).
 const FORCE_JS_SORT =
@@ -186,7 +177,16 @@ function SplatRendererImpl() {
   // Memoized on groupBufferFromId reference -- the store returns the same
   // reference when state hasn't changed, so this avoids re-merging every render.
   const merged = React.useMemo(
-    () => mergeGaussianGroups(groupBufferFromId, groupShFromId),
+    () =>
+      mergeGaussianGroups(
+        groupBufferFromId,
+        groupShFromId,
+        // Reuse the all-zero groupIndices only if the previous merge was also
+        // single-group (multi-group arrays contain non-zero entries).
+        prevMergedRef.current?.numGroups === 1
+          ? prevMergedRef.current.groupIndices
+          : undefined,
+      ),
     [groupBufferFromId, groupShFromId],
   );
 
@@ -321,11 +321,33 @@ function SplatRendererImpl() {
         meshPropsRef.current.textureSh.needsUpdate = true;
       }
 
-      // Update worker with new buffer.
-      postToWorker({
-        updateBuffer: merged.gaussianBuffer,
-        updateGroupIndices: merged.groupIndices,
-      });
+      // The sort order depends only on POSITIONS (+ groups). Colour/alpha-only
+      // updates — selection highlight, hide/isolate, timeline scrubbing,
+      // recolor, delete — leave positions untouched, and re-uploading to the
+      // worker costs a full structured clone + WASM rebuild + resort (the
+      // "browser hangs when selecting" on multi-million-splat scenes). Compare
+      // the xyz words (~20ms for 6M splats) and skip the worker when equal.
+      {
+        const prevBuf = prevMergedRef.current!.gaussianBuffer;
+        const newBuf = merged.gaussianBuffer;
+        let positionsChanged = false;
+        for (let i = 0; i < newBuf.length; i += 8) {
+          if (
+            newBuf[i] !== prevBuf[i] ||
+            newBuf[i + 1] !== prevBuf[i + 1] ||
+            newBuf[i + 2] !== prevBuf[i + 2]
+          ) {
+            positionsChanged = true;
+            break;
+          }
+        }
+        if (positionsChanged) {
+          postToWorker({
+            updateBuffer: merged.gaussianBuffer,
+            updateGroupIndices: merged.groupIndices,
+          });
+        }
+      }
 
       // Skip fade-in animation on updates.
       meshPropsRef.current.material.uniforms.transitionInState.value = 1.0;
@@ -349,12 +371,6 @@ function SplatRendererImpl() {
       }
       if (sortWorkerRef.current) {
         sortWorkerRef.current.postMessage({ close: true });
-      }
-      // Free the main-thread WASM Sorter (embind object; not GC'd).
-      sorterDisposedRef.current = true;
-      if (SorterRef.current) {
-        SorterRef.current.delete();
-        SorterRef.current = null;
       }
     };
   }, []);
@@ -394,53 +410,10 @@ function SplatRendererImpl() {
     new THREE.Matrix4().makePerspective(-1, 1, 1, -1, 0.1, 1000),
   );
 
-  // Make local sorter for blocking sorts (e.g., rendering from virtual cameras).
-  // `SorterRef` is an Emscripten embind object that owns WASM-heap allocations;
-  // it is only released by an explicit `.delete()` (GC does not reclaim it), so
-  // it must be deleted on unmount. `sorterDisposedRef` guards the async
-  // creation below from instantiating a Sorter after the component unmounts.
-  const SorterRef = React.useRef<any>(null);
-  const sorterDisposedRef = React.useRef(false);
-  const sorterBufferVersionRef = React.useRef<number>(0);
-  const currentBufferVersionRef = React.useRef<number>(0);
-
-  // Update buffer version when buffer changes.
-  if (bufferChanged) {
-    currentBufferVersionRef.current += 1;
-  }
-
-  // Update local sorter when buffer changes.
-  React.useEffect(() => {
-    if (sorterBufferVersionRef.current !== currentBufferVersionRef.current) {
-      sorterBufferVersionRef.current = currentBufferVersionRef.current;
-      (async () => {
-        try {
-          if (SorterRef.current) {
-            SorterRef.current.setBuffer(
-              merged.gaussianBuffer,
-              merged.groupIndices,
-            );
-          } else {
-            const sorter = new (await SorterModulePromise).Sorter(
-              merged.gaussianBuffer,
-              merged.groupIndices,
-            );
-            // The component may have unmounted while the module was loading; if
-            // so, free the just-created Sorter instead of orphaning it.
-            if (sorterDisposedRef.current) {
-              sorter.delete();
-              return;
-            }
-            SorterRef.current = sorter;
-          }
-        } catch (err) {
-          // No SIMD WASM on this device (e.g. older iOS WebKit): blocking
-          // sorts are skipped; the worker's JS fallback handles ordering.
-          console.warn("[splat] main-thread WASM sorter unavailable:", err);
-        }
-      })();
-    }
-  }, [merged.gaussianBuffer, merged.groupIndices]);
+  // NOTE: there used to be a SECOND, main-thread WASM Sorter here for
+  // "blocking" sorts, but nothing in this app ever calls updateCamera with
+  // blockingSort=true — and it duplicated the whole scene inside the WASM
+  // heap (~300MB peak on 6M-splat scenes). Removed; the worker owns sorting.
 
   const updateCamera = React.useCallback(
     function updateCamera(
@@ -534,38 +507,26 @@ function SplatRendererImpl() {
         // heuristic: skip the sort while the view-direction dot product stays
         // within 0.01 of the last-sorted direction; a depth-translation term
         // (relative to the group's distance) covers WASD-style flying.
-        if (blockingSort && SorterRef.current !== null) {
-          // Blocking sorts are for exact one-off renders; never skip.
-          const sortedIndices = SorterRef.current.sort(
-            Tz_camera_groups,
-          ) as Uint32Array;
-          meshProps.sortedIndexAttribute.set(sortedIndices);
-          meshProps.sortedIndexAttribute.needsUpdate = true;
+        const lastSortTz = lastSortTzRef.current;
+        const st = settingsRef.current.sortThreshold;
+        let sortNeeded = lastSortTz.length !== Tz_camera_groups.length;
+        for (let g = 0; !sortNeeded && g * 4 < Tz_camera_groups.length; g++) {
+          const i = g * 4;
+          const dot =
+            Tz_camera_groups[i] * lastSortTz[i] +
+            Tz_camera_groups[i + 1] * lastSortTz[i + 1] +
+            Tz_camera_groups[i + 2] * lastSortTz[i + 2];
+          const dtz = Math.abs(Tz_camera_groups[i + 3] - lastSortTz[i + 3]);
+          if (Math.abs(dot - 1) > st || dtz > st * (1.0 + Math.abs(lastSortTz[i + 3])))
+            sortNeeded = true;
+        }
+        if (sortNeeded) {
+          postToWorker({
+            setTz_camera_groups: Tz_camera_groups,
+          });
           if (lastSortTzRef.current.length !== Tz_camera_groups.length)
             lastSortTzRef.current = new Float32Array(Tz_camera_groups.length);
           lastSortTzRef.current.set(Tz_camera_groups);
-        } else {
-          const lastSortTz = lastSortTzRef.current;
-          const st = settingsRef.current.sortThreshold;
-          let sortNeeded = lastSortTz.length !== Tz_camera_groups.length;
-          for (let g = 0; !sortNeeded && g * 4 < Tz_camera_groups.length; g++) {
-            const i = g * 4;
-            const dot =
-              Tz_camera_groups[i] * lastSortTz[i] +
-              Tz_camera_groups[i + 1] * lastSortTz[i + 1] +
-              Tz_camera_groups[i + 2] * lastSortTz[i + 2];
-            const dtz = Math.abs(Tz_camera_groups[i + 3] - lastSortTz[i + 3]);
-            if (Math.abs(dot - 1) > st || dtz > st * (1.0 + Math.abs(lastSortTz[i + 3])))
-              sortNeeded = true;
-          }
-          if (sortNeeded) {
-            postToWorker({
-              setTz_camera_groups: Tz_camera_groups,
-            });
-            if (lastSortTzRef.current.length !== Tz_camera_groups.length)
-              lastSortTzRef.current = new Float32Array(Tz_camera_groups.length);
-            lastSortTzRef.current.set(Tz_camera_groups);
-          }
         }
       }
       if (groupsMovedWrtCam || visibilitiesChanged) {
@@ -694,6 +655,7 @@ function SplatRendererImpl() {
 function mergeGaussianGroups(
   groupBufferFromName: { [name: string]: Uint32Array },
   groupShFromName: { [name: string]: Uint32Array | undefined } = {},
+  prevGroupIndices?: Uint32Array,
 ) {
   // Create geometry. Each Gaussian will be rendered as a quad.
   let totalBufferLength = 0;
@@ -701,11 +663,34 @@ function mergeGaussianGroups(
     totalBufferLength += buffer.length;
   }
   const numGaussians = totalBufferLength / 8;
+  const names = Object.keys(groupBufferFromName);
+
+  // Single-group fast path (the common case: no compare overlays): the packed
+  // format already carries group index 0 in word 3 of every gaussian, so the
+  // group buffer can be used as-is — no 32B/gaussian merge copy (~190MB saved
+  // per edit on 6M-splat scenes). The all-zero groupIndices array is reused
+  // across merges of the same size for the same reason.
+  if (names.length === 1) {
+    const buffer0 = groupBufferFromName[names[0]];
+    const groupIndices =
+      prevGroupIndices && prevGroupIndices.length === numGaussians
+        ? prevGroupIndices
+        : new Uint32Array(numGaussians);
+    const sh = groupShFromName[names[0]];
+    let shBuffer: Uint32Array | null = null;
+    if (sh) {
+      if (sh.length === buffer0.length) shBuffer = sh;
+      else {
+        shBuffer = new Uint32Array(buffer0.length);
+        shBuffer.set(sh.subarray(0, Math.min(sh.length, buffer0.length)));
+      }
+    }
+    return { numGaussians, gaussianBuffer: buffer0, numGroups: 1, groupIndices, shBuffer };
+  }
+
   const gaussianBuffer = new Uint32Array(totalBufferLength);
   const groupIndices = new Uint32Array(numGaussians);
-  const anySh = Object.keys(groupBufferFromName).some(
-    (name) => groupShFromName[name] != null,
-  );
+  const anySh = names.some((name) => groupShFromName[name] != null);
   const shBuffer = anySh ? new Uint32Array(totalBufferLength) : null;
 
   let offset = 0;

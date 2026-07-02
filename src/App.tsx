@@ -273,7 +273,10 @@ export default function App() {
         liveCtxRef.current = { host: _host, run: _run }; // enable live polling for this run
         final = capacity;
       }
-      if (final) originalBuffer.current = final.slice();
+      // Share the reference (no copy): every edit path is copy-on-write, so
+      // the freshly loaded array is never mutated — a .slice() here doubled
+      // load-time memory on multi-million-splat scenes.
+      if (final) originalBuffer.current = final;
       if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
@@ -369,9 +372,24 @@ export default function App() {
 
   bufferRef.current = displayBuffer; // pick against what's actually visible
 
-  // Snapshot for undo; any new edit invalidates the redo stack.
+  // Snapshot for undo; any new edit invalidates the redo stack. Stacks are
+  // capped by BYTES, not just count — 30 full snapshots of a 6M-splat scene
+  // would be ~5.7GB. Oldest entries drop first; the newest always survives.
+  const MAX_STACK = 30;
+  const MAX_STACK_BYTES = 384 * 1048576;
+  function trimStack(s: Uint32Array[]): Uint32Array[] {
+    let bytes = 0, start = s.length;
+    while (
+      start > 0 &&
+      s.length - start < MAX_STACK &&
+      (bytes + s[start - 1].byteLength <= MAX_STACK_BYTES || start === s.length)
+    ) {
+      bytes += s[--start].byteLength;
+    }
+    return start === 0 ? s : s.slice(start);
+  }
   function pushUndo(buf: Uint32Array) {
-    setUndoStack((s) => [...s.slice(-29), buf]);
+    setUndoStack((s) => trimStack([...s, buf]));
     setRedoStack([]);
   }
 
@@ -981,7 +999,7 @@ export default function App() {
         ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null, sh1: null }
         : parsePly(await file.arrayBuffer());
       setBuffer(b); setSh1(sh); setBounds(computeBounds(b));
-      originalBuffer.current = b.slice();
+      originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
       setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}`);
     } catch (err) {
@@ -1012,7 +1030,7 @@ export default function App() {
       });
       setRunId(scene.name);
       setBuffer(b); setBounds(computeBounds(b));
-      originalBuffer.current = b.slice();
+      originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       setStatus(`${scene.name}: ${(b.length / 8).toLocaleString()} gaussians`);
     } catch (err) {
       setStatus(`테스트 씬 오류: ${(err as Error).message} (네트워크/CORS 확인)`);
@@ -1118,7 +1136,7 @@ export default function App() {
   function becomeScene(name: string, b: Uint32Array) {
     setRunId(name);
     setBuffer(b); setSh1(null); setBounds(computeBounds(b));
-    originalBuffer.current = b.slice();
+    originalBuffer.current = b; // shared, not copied — edits are copy-on-write
     setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
     setSplatKey((k) => k + 1); // remount so the new scene inits + sorts without a camera move
@@ -1223,7 +1241,7 @@ export default function App() {
   function undo() {
     if (undoStack.length === 0 || !buffer) return;
     const prev = undoStack[undoStack.length - 1];
-    setRedoStack((r) => [...r.slice(-29), buffer]);
+    setRedoStack((r) => trimStack([...r, buffer]));
     setUndoStack((s) => s.slice(0, -1));
     setBuffer(prev); setBounds(computeBounds(prev)); setLiveBuffer(null);
     setSplatKey((k) => k + 1);
@@ -1231,7 +1249,7 @@ export default function App() {
   function redo() {
     if (redoStack.length === 0 || !buffer) return;
     const next = redoStack[redoStack.length - 1];
-    setUndoStack((s) => [...s.slice(-29), buffer]);
+    setUndoStack((s) => trimStack([...s, buffer]));
     setRedoStack((r) => r.slice(0, -1));
     setBuffer(next); setBounds(computeBounds(next)); setLiveBuffer(null);
     setSplatKey((k) => k + 1);
@@ -1239,8 +1257,8 @@ export default function App() {
   function reset() {
     const ob = originalBuffer.current;
     if (!ob) return;
-    const copy = ob.slice();
-    setBuffer(copy); setBounds(computeBounds(copy));
+    // No copy: edits are copy-on-write, so handing back the original is safe.
+    setBuffer(ob); setBounds(computeBounds(ob));
     setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null); setGroups([]);
     setSplatKey((k) => k + 1);
   }
