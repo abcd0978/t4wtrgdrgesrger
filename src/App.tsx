@@ -196,6 +196,7 @@ export default function App() {
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   const [addSel, setAddSel] = React.useState(false); // 추가 선택 모드 (모바일용 Shift 대체)
   const [wandTol, setWandTol] = React.useState(40); // 연결 영역 선택 색 허용치
+  const [wandMode, setWandMode] = React.useState<"both" | "space" | "color">("both"); // 매직 완드 기준
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -847,11 +848,12 @@ export default function App() {
   }
   function showAll() { setVis({ mode: "all", set: new Set() }); }
 
-  // Magic wand: flood-fill from the current selection through space + colour.
-  // Candidates = gaussians whose colour is within `wandTol` of the seed
-  // average; connectivity = 26-neighbourhood BFS over a coarse grid
-  // (scene radius / 120), so the selection stops at colour boundaries and
-  // spatial gaps. No AI — geometry + colour only.
+  // Magic wand: expand from the current selection by the chosen criterion —
+  // "both" = colour gate + spatial 26-neighbourhood BFS (stops at colour
+  // boundaries and gaps), "space" = spatial connectivity only (grabs whole
+  // touching structures regardless of colour), "color" = colour similarity
+  // globally (no connectivity, like the colour filter but seeded from the
+  // picked points). Grid cell = scene radius / 120. No AI — geometry+colour.
   function selectConnected() {
     if (!buffer || !bounds || selection.size === 0) return;
     const dv = viewOf(buffer);
@@ -869,13 +871,31 @@ export default function App() {
     }
     sr /= selection.size; sg /= selection.size; sb /= selection.size;
     const tol2 = wandTol * wandTol;
-    // Bucket colour-matching gaussians by cell.
+    const useColor = wandMode !== "space";
+
+    if (wandMode === "color") {
+      // Colour only: global similarity, no connectivity.
+      const nextSel = new Set(selection);
+      for (let i = 0; i < slots; i++) {
+        const b = i * 32;
+        if (dv.getUint8(b + 31) === 0) continue;
+        const dr = dv.getUint8(b + 28) - sr, dg = dv.getUint8(b + 29) - sg, db = dv.getUint8(b + 30) - sb;
+        if (dr * dr + dg * dg + db * db <= tol2) nextSel.add(i);
+      }
+      setSelection(nextSel);
+      setStatus(`🪄 색 유사: ${nextSel.size.toLocaleString()}개 선택 (허용치 ${wandTol})`);
+      return;
+    }
+
+    // Bucket candidate gaussians by cell (colour-gated unless space-only).
     const grid = new Map<number, number[]>();
     for (let i = 0; i < slots; i++) {
       const b = i * 32;
       if (dv.getUint8(b + 31) === 0) continue;
-      const dr = dv.getUint8(b + 28) - sr, dg = dv.getUint8(b + 29) - sg, db = dv.getUint8(b + 30) - sb;
-      if (dr * dr + dg * dg + db * db > tol2) continue;
+      if (useColor) {
+        const dr = dv.getUint8(b + 28) - sr, dg = dv.getUint8(b + 29) - sg, db = dv.getUint8(b + 30) - sb;
+        if (dr * dr + dg * dg + db * db > tol2) continue;
+      }
       const k = keyOf(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
       let arr = grid.get(k);
       if (!arr) grid.set(k, (arr = []));
@@ -908,7 +928,7 @@ export default function App() {
       if (arr) for (const i of arr) nextSel.add(i);
     }
     setSelection(nextSel);
-    setStatus(`🪄 연결 영역: ${nextSel.size.toLocaleString()}개 선택 (허용치 ${wandTol})`);
+    setStatus(`🪄 연결 영역 (${wandMode === "space" ? "공간만" : "색+공간"}): ${nextSel.size.toLocaleString()}개 선택`);
   }
 
   // Invert: select every visible gaussian that isn't currently selected.
@@ -1721,7 +1741,7 @@ export default function App() {
         <SelectionPanel
           selectionSize={selection.size}
           onDeselect={() => setSelection(new Set())} onInvert={invertSelection} onGrow={growSelection}
-          addSel={addSel} setAddSel={setAddSel} wandTol={wandTol} setWandTol={setWandTol} onWand={selectConnected}
+          addSel={addSel} setAddSel={setAddSel} wandTol={wandTol} setWandTol={setWandTol} wandMode={wandMode} setWandMode={setWandMode} onWand={selectConnected}
           moveStep={moveStep} setMoveStep={setMoveStep} onMove={moveSelection}
           rotStep={rotStep} setRotStep={setRotStep} onRotate={rotateSelection}
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
