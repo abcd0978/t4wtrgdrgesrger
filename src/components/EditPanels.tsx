@@ -10,7 +10,7 @@ export function SelectionPanel({
   rotStep, setRotStep, onRotate,
   onScaleUniform, onScaleAxis,
   editColor, setEditColor, editAlpha, setEditAlpha, onApplyColor,
-  onDuplicate, onHide, onIsolate, onDelete, onKeepOnly, onExportSel,
+  onDuplicate, onHide, onIsolate, onDelete, onKeepOnly, onExportSel, onPivot,
 }: {
   selectionSize: number;
   onDeselect: () => void; onInvert: () => void; onGrow: () => void;
@@ -18,7 +18,7 @@ export function SelectionPanel({
   rotStep: number; setRotStep: (v: number) => void; onRotate: (axis: Axis, deg: number) => void;
   onScaleUniform: (f: number) => void; onScaleAxis: (sx: number, sy: number, sz: number) => void;
   editColor: string; setEditColor: (v: string) => void; editAlpha: number; setEditAlpha: (v: number) => void; onApplyColor: () => void;
-  onDuplicate: () => void; onHide: () => void; onIsolate: () => void; onDelete: () => void; onKeepOnly: () => void; onExportSel: () => void;
+  onDuplicate: () => void; onHide: () => void; onIsolate: () => void; onDelete: () => void; onKeepOnly: () => void; onExportSel: () => void; onPivot: () => void;
 }) {
   return (
     <FloatingPanel title={`선택 ${selectionSize.toLocaleString()}개`} onClose={onDeselect} style={{ top: 62, left: 10 }} width="min(214px, calc(100vw - 20px))">
@@ -26,6 +26,7 @@ export function SelectionPanel({
           <button className="grow" onClick={onInvert}>선택 반전</button>
           <button className="grow" onClick={onGrow} title="선택 영역(박스)을 채워 확장">확장</button>
         </div>
+        <button onClick={onPivot} title="선택의 중심을 카메라 회전축(궤도 타깃)으로">🎯 선택을 회전축으로</button>
 
         <label className="row muted">이동
           <input type="range" className="grow" min={0.01} max={1} step={0.01} value={Math.min(moveStep, 1)} onChange={(e) => setMoveStep(parseFloat(e.target.value))} />

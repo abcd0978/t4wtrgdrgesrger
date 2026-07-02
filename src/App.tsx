@@ -66,6 +66,7 @@ const HELP = [
   ["스크롤", "확대 / 축소"],
   ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
   ["더블클릭", "가우시안 1개 선택"],
+  ["길게 누르기 (0.5초)", "그 지점을 회전축(피벗)으로"],
   ["더블클릭 + 드래그", "박스로 여러 개 선택 (Shift: 추가)"],
   ["주황 구 드래그", "선택 이동 (실시간)"],
   ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
@@ -1575,6 +1576,7 @@ export default function App() {
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}
           editColor={editColor} setEditColor={setEditColor} editAlpha={editAlpha} setEditAlpha={setEditAlpha} onApplyColor={applyColorOpacity}
           onDuplicate={duplicateSelection} onHide={hideSelection} onIsolate={isolateSelection} onDelete={deleteSelection} onKeepOnly={keepOnlySelection} onExportSel={exportSelectionPly}
+          onPivot={() => { if (buffer && selection.size > 0) { camApiRef.current?.setTarget(selCenter(buffer, selection)); setStatus("회전축 → 선택 중심"); } }}
         />
       )}
 
@@ -1866,7 +1868,8 @@ export default function App() {
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} />
         <CameraBridge apiRef={camApiRef} />
-        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick} />
+        <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} setDrag={setDrag} setSelecting={setSelecting} measureMode={measureMode} onMeasurePick={onMeasurePick}
+          onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
         {buffer && bounds && selection.size > 0 && !measureMode && (
           <>

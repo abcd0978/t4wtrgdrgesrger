@@ -82,6 +82,8 @@ export function ApplyCamera({ view, onApplied }: { view: { p: [number, number, n
 export interface CameraApi {
   get: () => { p: [number, number, number]; t: [number, number, number] };
   apply: (p: [number, number, number], t: [number, number, number]) => void;
+  /** Move only the orbit target (rotation pivot); the camera stays put. */
+  setTarget: (t: [number, number, number]) => void;
 }
 
 /** Publishes get/apply for the camera pos+target (share URLs + view presets). */
@@ -99,6 +101,9 @@ export function CameraBridge({ apiRef }: { apiRef: React.MutableRefObject<Camera
         camera.position.set(p[0], p[1], p[2]);
         if (controls?.target) { controls.target.set(t[0], t[1], t[2]); controls.update(); }
         else camera.lookAt(t[0], t[1], t[2]);
+      },
+      setTarget: (t) => {
+        if (controls?.target) { controls.target.set(t[0], t[1], t[2]); controls.update(); }
       },
     };
     return () => { apiRef.current = null; };
@@ -155,10 +160,11 @@ export function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts })
 }
 
 /** Double-click = single pick; double-click + drag = box select. Plain drag = camera.
- * In measure mode a single double-click instead reports the picked gaussian's
- * world position (for the two-point distance tool). */
+ * Long-press (hold still ~0.5s) = set the rotation pivot (orbit target) to the
+ * gaussian under the pointer. In measure mode a single double-click instead
+ * reports the picked gaussian's world position (for the distance tool). */
 export function InputController({
-  bufferRef, selectionRef, setSelection, setDrag, setSelecting, measureMode, onMeasurePick,
+  bufferRef, selectionRef, setSelection, setDrag, setSelecting, measureMode, onMeasurePick, onSetPivot,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
   selectionRef: React.MutableRefObject<Set<number>>;
@@ -167,13 +173,14 @@ export function InputController({
   setSelecting: (b: boolean) => void;
   measureMode: boolean;
   onMeasurePick: (p: [number, number, number]) => void;
+  onSetPivot?: (p: [number, number, number]) => void;
 }) {
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
-  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, onMeasurePick });
-  env.current = { camera, w: size.width, h: size.height, measureMode, onMeasurePick };
+  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, onMeasurePick, onSetPivot });
+  env.current = { camera, w: size.width, h: size.height, measureMode, onMeasurePick, onSetPivot };
 
   React.useEffect(() => {
     const el = gl.domElement;
@@ -232,7 +239,14 @@ export function InputController({
       env.current.onMeasurePick([dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)]);
     }
 
+    // Long-press pivot: armed on a single still pointer, cancelled by movement
+    // (>8px), a second pointer (pinch), release, or a double-click select.
+    let lpTimer: number | null = null, lpX = 0, lpY = 0, pointersDown = 0;
+    const cancelLp = () => { if (lpTimer !== null) { clearTimeout(lpTimer); lpTimer = null; } };
+
     const down = (e: PointerEvent) => {
+      pointersDown++;
+      cancelLp();
       const now = performance.now();
       if (now - lastUp < 300 && Math.hypot(e.clientX - lx, e.clientY - ly) < 12) {
         // double-click: start box select, lock the camera directly
@@ -240,10 +254,26 @@ export function InputController({
         if (controls) controls.enabled = false;
         setSelecting(true);
         setDrag({ x0: sx, y0: sy, x1: sx, y1: sy });
+      } else if (pointersDown === 1 && env.current.onSetPivot) {
+        lpX = e.clientX; lpY = e.clientY;
+        lpTimer = window.setTimeout(() => {
+          lpTimer = null;
+          const buffer = bufferRef.current;
+          const idx = pickNearest(lpX, lpY);
+          if (idx < 0 || !buffer) return;
+          const dv = new DataView(buffer.buffer);
+          const b = idx * 32;
+          env.current.onSetPivot?.([dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)]);
+        }, 550);
       }
     };
-    const move = (e: PointerEvent) => { if (sel) setDrag({ x0: sx, y0: sy, x1: e.clientX, y1: e.clientY }); };
+    const move = (e: PointerEvent) => {
+      if (lpTimer !== null && Math.hypot(e.clientX - lpX, e.clientY - lpY) > 8) cancelLp();
+      if (sel) setDrag({ x0: sx, y0: sy, x1: e.clientX, y1: e.clientY });
+    };
     const up = (e: PointerEvent) => {
+      pointersDown = Math.max(0, pointersDown - 1);
+      cancelLp();
       if (sel) {
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
         if (env.current.measureMode) { if (dist < 5) measure(sx, sy); }
@@ -257,6 +287,7 @@ export function InputController({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => {
+      cancelLp();
       el.removeEventListener("pointerdown", down);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
