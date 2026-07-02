@@ -76,10 +76,11 @@ export const SplatObject = React.forwardRef<
   THREE.Group,
   {
     buffer: Uint32Array;
+    sh1?: Uint32Array | null; // optional degree-1 SH side buffer (8 u32/gaussian)
     sceneNodeName?: string;
     children?: React.ReactNode;
   }
->(function SplatObject({ buffer, sceneNodeName, children }, ref) {
+>(function SplatObject({ buffer, sh1, sceneNodeName, children }, ref) {
   const splatContext = React.useContext(GaussianSplatsContext)!;
   const { setBuffer, removeBuffer } = splatContext.gaussianSplatState.actions;
   const nodeRefFromId = splatContext.gaussianSplatState.store(
@@ -102,8 +103,8 @@ export const SplatObject = React.forwardRef<
 
   // Update buffer when it changes.
   React.useEffect(() => {
-    setBuffer(name, buffer);
-  }, [name, buffer, setBuffer]);
+    setBuffer(name, buffer, sh1);
+  }, [name, buffer, sh1, setBuffer]);
 
   return (
     <group
@@ -153,6 +154,9 @@ function SplatRendererImpl() {
   const groupBufferFromId = splatContext.gaussianSplatState.store(
     (state) => state.groupBufferFromId,
   );
+  const groupShFromId = splatContext.gaussianSplatState.store(
+    (state) => state.groupShFromId,
+  );
   const nodeRefFromId = splatContext.gaussianSplatState.store(
     (state) => state.nodeRefFromId,
   );
@@ -170,6 +174,7 @@ function SplatRendererImpl() {
     numGaussians: number;
     numGroups: number;
     groupIndices: Uint32Array;
+    shBuffer: Uint32Array | null;
   } | null>(null);
   const isFirstRenderRef = React.useRef(true);
   const initializedBufferTextureRef = React.useRef(false);
@@ -181,8 +186,8 @@ function SplatRendererImpl() {
   // Memoized on groupBufferFromId reference -- the store returns the same
   // reference when state hasn't changed, so this avoids re-merging every render.
   const merged = React.useMemo(
-    () => mergeGaussianGroups(groupBufferFromId),
-    [groupBufferFromId],
+    () => mergeGaussianGroups(groupBufferFromId, groupShFromId),
+    [groupBufferFromId, groupShFromId],
   );
 
   // Helper function to post messages to worker.
@@ -198,10 +203,12 @@ function SplatRendererImpl() {
     merged.gaussianBuffer !== prevMergedRef.current.gaussianBuffer;
 
   // Check if number of Gaussians or groups changed (requires texture resize).
+  // SH presence flipping also needs a rebuild (dummy 1x1 vs full-size texture).
   const sizeChanged =
     prevMergedRef.current &&
     (merged.numGaussians !== prevMergedRef.current.numGaussians ||
-      merged.numGroups !== prevMergedRef.current.numGroups);
+      merged.numGroups !== prevMergedRef.current.numGroups ||
+      (merged.shBuffer != null) !== (prevMergedRef.current.shBuffer != null));
 
   // Initialize resources on first render.
   if (isFirstRenderRef.current) {
@@ -210,6 +217,7 @@ function SplatRendererImpl() {
       merged.gaussianBuffer,
       merged.numGroups,
       maxTextureSize,
+      merged.shBuffer,
     );
 
     // Show splats immediately with identity sort order. This makes splats
@@ -264,6 +272,7 @@ function SplatRendererImpl() {
         merged.gaussianBuffer,
         merged.numGroups,
         maxTextureSize,
+        merged.shBuffer,
       );
 
       // Dispose old resources.
@@ -271,6 +280,7 @@ function SplatRendererImpl() {
       oldProps.geometry.dispose();
       oldProps.material.dispose();
       oldProps.textureT_camera_groups.dispose();
+      oldProps.textureSh.dispose();
 
       // Seed identity draw order so every Gaussian is visible immediately. The
       // new sortedIndex attribute is all-zeros otherwise, which collapses every
@@ -304,6 +314,12 @@ function SplatRendererImpl() {
       textureData.fill(0);
       textureData.set(merged.gaussianBuffer);
       meshPropsRef.current.textureBuffer.needsUpdate = true;
+      if (meshPropsRef.current.hasSh && merged.shBuffer) {
+        const shData = meshPropsRef.current.textureSh.image.data as Uint32Array;
+        shData.fill(0);
+        shData.set(merged.shBuffer.subarray(0, Math.min(merged.shBuffer.length, shData.length)));
+        meshPropsRef.current.textureSh.needsUpdate = true;
+      }
 
       // Update worker with new buffer.
       postToWorker({
@@ -329,6 +345,7 @@ function SplatRendererImpl() {
         meshPropsRef.current.geometry.dispose();
         meshPropsRef.current.material.dispose();
         meshPropsRef.current.textureT_camera_groups.dispose();
+        meshPropsRef.current.textureSh.dispose();
       }
       if (sortWorkerRef.current) {
         sortWorkerRef.current.postMessage({ close: true });
@@ -643,6 +660,7 @@ function SplatRendererImpl() {
     (uniforms.cropMax.value as THREE.Vector3).fromArray(settings.cropMax);
     uniforms.wipeEnable.value = settings.wipeOn;
     uniforms.wipePos.value = settings.wipePos;
+    uniforms.shEnable.value = meshProps.hasSh && settings.shOn ? 1.0 : 0.0;
     uniforms.transitionInState.value = Math.min(
       uniforms.transitionInState.value + delta * settings.fadeSpeed,
       1.0,
@@ -669,10 +687,14 @@ function SplatRendererImpl() {
 }
 
 /**Consolidate groups of Gaussians into a single buffer, to make it possible
- * for them to be sorted globally.*/
-function mergeGaussianGroups(groupBufferFromName: {
-  [name: string]: Uint32Array;
-}) {
+ * for them to be sorted globally. SH side buffers (8 u32/gaussian, same
+ * stride as the base) merge in the same order; groups without SH (or with a
+ * stale length after edits) are zero-filled, which the shader reads as "no
+ * view-dependent term".*/
+function mergeGaussianGroups(
+  groupBufferFromName: { [name: string]: Uint32Array },
+  groupShFromName: { [name: string]: Uint32Array | undefined } = {},
+) {
   // Create geometry. Each Gaussian will be rendered as a quad.
   let totalBufferLength = 0;
   for (const buffer of Object.values(groupBufferFromName)) {
@@ -681,9 +703,13 @@ function mergeGaussianGroups(groupBufferFromName: {
   const numGaussians = totalBufferLength / 8;
   const gaussianBuffer = new Uint32Array(totalBufferLength);
   const groupIndices = new Uint32Array(numGaussians);
+  const anySh = Object.keys(groupBufferFromName).some(
+    (name) => groupShFromName[name] != null,
+  );
+  const shBuffer = anySh ? new Uint32Array(totalBufferLength) : null;
 
   let offset = 0;
-  for (const [groupIndex, groupBuffer] of Object.values(
+  for (const [groupIndex, [name, groupBuffer]] of Object.entries(
     groupBufferFromName,
   ).entries()) {
     groupIndices.fill(
@@ -692,6 +718,10 @@ function mergeGaussianGroups(groupBufferFromName: {
       (offset + groupBuffer.length) / 8,
     );
     gaussianBuffer.set(groupBuffer, offset);
+    const sh = groupShFromName[name];
+    if (shBuffer && sh) {
+      shBuffer.set(sh.subarray(0, Math.min(sh.length, groupBuffer.length)), offset);
+    }
 
     // Each Gaussian is allocated
     // - 12 bytes for center x, y, z (float32)
@@ -706,5 +736,5 @@ function mergeGaussianGroups(groupBufferFromName: {
   }
 
   const numGroups = Object.keys(groupBufferFromName).length;
-  return { numGaussians, gaussianBuffer, numGroups, groupIndices };
+  return { numGaussians, gaussianBuffer, numGroups, groupIndices, shBuffer };
 }

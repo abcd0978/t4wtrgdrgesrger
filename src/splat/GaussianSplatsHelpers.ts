@@ -39,6 +39,8 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     cropMax: /* @__PURE__ */ new THREE.Vector3(),
     wipeEnable: 0.0,
     wipePos: 0.5,
+    shEnable: 0.0,
+    textureSh: null as THREE.DataTexture | null,
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
   // highp float is critical on mobile: Apple GPUs really evaluate mediump as
@@ -84,6 +86,10 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
   uniform float cropEnable;
   uniform vec3 cropMin;
   uniform vec3 cropMax;
+
+  // Degree-1 spherical harmonics (view-dependent colour), optional.
+  uniform float shEnable;
+  uniform usampler2D textureSh;
 
   out vec4 vRgba;
   out vec2 vPosition;
@@ -202,6 +208,28 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
       float(rgbaUint32 >> uint(24)) / 255.0 * opacityScale
     );
 
+    // Degree-1 SH: view-dependent colour term. Direction is from the camera to
+    // the gaussian, in the group's (capture) frame: camPos = -R^T t.
+    if (shEnable > 0.5) {
+      uvec4 shA = texelFetch(textureSh, texPos0, 0);
+      uvec4 shB = texelFetch(textureSh, texPos1, 0);
+      vec2 c01 = unpackHalf2x16(shA.x); // R0 R1
+      vec2 c23 = unpackHalf2x16(shA.y); // R2 G0
+      vec2 c45 = unpackHalf2x16(shA.z); // G1 G2
+      vec2 c67 = unpackHalf2x16(shA.w); // B0 B1
+      vec2 c8_ = unpackHalf2x16(shB.x); // B2 -
+      mat3 R_cg = mat3(T_camera_group);
+      vec3 camPos_group = -(T_camera_group[3].xyz * R_cg);
+      vec3 d = normalize(center - camPos_group);
+      // Basis: Y1-1 = -K*y, Y10 = K*z, Y11 = -K*x  (K = SH degree-1 constant)
+      vec3 basis = vec3(-d.y, d.z, -d.x) * 0.4886025119029199;
+      vRgba.rgb = clamp(vRgba.rgb + vec3(
+        dot(vec3(c01.x, c01.y, c23.x), basis),
+        dot(vec3(c23.y, c45.x, c45.y), basis),
+        dot(vec3(c67.x, c67.y, c8_.x), basis)
+      ), 0.0, 1.0);
+    }
+
     // Throw the Gaussian off the screen if it's too close, too far, or too small.
     float weightedDeterminant = vRgba.a * (diag1 * diag2 - offDiag * offDiag);
     if (weightedDeterminant < cullThreshold)
@@ -250,11 +278,14 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
 /** Type for mesh props returned by createGaussianMeshProps. */
 export type GaussianMeshProps = ReturnType<typeof createGaussianMeshProps>;
 
-/** Create properties for rendering Gaussians via a three.js mesh. */
+/** Create properties for rendering Gaussians via a three.js mesh.
+ * `shBuffer` (optional, 8 u32 per gaussian) carries degree-1 SH coefficients;
+ * when absent a 1x1 dummy texture keeps the sampler bound at zero cost. */
 export function createGaussianMeshProps(
   gaussianBuffer: Uint32Array,
   numGroups: number,
   maxTextureSize: number,
+  shBuffer?: Uint32Array | null,
 ) {
   const numGaussians = gaussianBuffer.length / 8;
 
@@ -296,6 +327,20 @@ export function createGaussianMeshProps(
   textureBuffer.internalFormat = "RGBA32UI";
   textureBuffer.needsUpdate = true;
 
+  // SH side texture mirrors the base buffer's index->texel layout (2 texels
+  // per gaussian), so the shader reuses texPos0/texPos1.
+  const hasSh = shBuffer != null && shBuffer.length > 0;
+  let textureSh: THREE.DataTexture;
+  if (hasSh) {
+    const shPadded = new Uint32Array(textureWidth * textureHeight * 4);
+    shPadded.set(shBuffer!.subarray(0, Math.min(shBuffer!.length, shPadded.length)));
+    textureSh = new THREE.DataTexture(shPadded, textureWidth, textureHeight, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
+  } else {
+    textureSh = new THREE.DataTexture(new Uint32Array(4), 1, 1, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
+  }
+  textureSh.internalFormat = "RGBA32UI";
+  textureSh.needsUpdate = true;
+
   const rowMajorT_camera_groups = new Float32Array(numGroups * 12);
   const textureT_camera_groups = new THREE.DataTexture(
     rowMajorT_camera_groups,
@@ -311,6 +356,7 @@ export function createGaussianMeshProps(
   material.fog = true;
   material.textureBuffer = textureBuffer;
   material.textureT_camera_groups = textureT_camera_groups;
+  material.textureSh = textureSh;
   material.numGaussians = numGaussians;
 
   return {
@@ -324,6 +370,8 @@ export function createGaussianMeshProps(
     rowMajorT_camera_groups,
     numGaussians,
     numGroups,
+    textureSh,
+    hasSh,
   };
 }
 
@@ -339,6 +387,7 @@ export function useGaussianMeshProps(
 /**Global splat state.*/
 interface SplatState {
   groupBufferFromId: { [id: string]: Uint32Array };
+  groupShFromId: { [id: string]: Uint32Array | undefined };
   nodeRefFromId: React.MutableRefObject<{
     [name: string]: undefined | Object3D;
   }>;
@@ -348,7 +397,7 @@ interface SplatState {
 }
 
 interface SplatActions {
-  setBuffer: (id: string, buffer: Uint32Array) => void;
+  setBuffer: (id: string, buffer: Uint32Array, sh1?: Uint32Array | null) => void;
   removeBuffer: (id: string) => void;
 }
 
@@ -361,20 +410,24 @@ export function useGaussianSplatStore() {
   return React.useState(() => {
     const store = createStore<SplatState>({
       groupBufferFromId: {},
+      groupShFromId: {},
       nodeRefFromId: nodeRefFromId,
       sceneNodeNameFromId: sceneNodeNameFromId,
     });
 
     const actions: SplatActions = {
-      setBuffer: (id, buffer) => {
+      setBuffer: (id, buffer, sh1) => {
         store.set((state) => ({
           groupBufferFromId: { ...state.groupBufferFromId, [id]: buffer },
+          groupShFromId: { ...state.groupShFromId, [id]: sh1 ?? undefined },
         }));
       },
       removeBuffer: (id) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { [id]: _, ...buffers } = store.get().groupBufferFromId;
-        store.set({ groupBufferFromId: buffers });
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { [id]: _sh, ...shs } = store.get().groupShFromId;
+        store.set({ groupBufferFromId: buffers, groupShFromId: shs });
       },
     };
 

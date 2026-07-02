@@ -20,6 +20,7 @@ export interface RenderSettings {
   cropMax: [number, number, number];
   wipeOn: number; // 1 = A/B wipe: main scene left of the divider, overlays right
   wipePos: number; // divider position as a screen fraction (0..1)
+  shOn: number; // 1 = evaluate degree-1 SH (view-dependent colour) when the data has it
 }
 
 // Defaults match antimatter15/splat's (hardcoded) shader behaviour: no size
@@ -47,6 +48,7 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   cropMax: [0, 0, 0],
   wipeOn: 0,
   wipePos: 0.5,
+  shOn: 1,
 };
 
 export const RenderSettingsContext = createContext<RenderSettings>(DEFAULT_SETTINGS);

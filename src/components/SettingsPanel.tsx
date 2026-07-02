@@ -120,6 +120,9 @@ export function SettingsPanel({
       <NumSlider label="falloff" k="falloffCutoff" min={1} max={9} step={0.25} settings={settings} setSettings={setSettings} />
       <NumSlider label="alphaTest" k="alphaTest" min={0} max={0.5} step={0.01} settings={settings} setSettings={setSettings} />
       <NumSlider label="fade" k="fadeSpeed" min={0.1} max={10} step={0.1} settings={settings} setSettings={setSettings} />
+      <label style={row} title="PLY에 SH 계수(f_rest)가 있으면 보는 방향에 따라 색이 변함 (반사·광택 표현)">
+        <input type="checkbox" checked={settings.shOn === 1} onChange={(e) => setSettings((s) => ({ ...s, shOn: e.target.checked ? 1 : 0 }))} /> 뷰 방향 색 (SH) <span style={{ fontSize: 11, opacity: 0.6 }}>PLY 전용</span>
+      </label>
       <button onClick={() => setSettings(DEFAULT_SETTINGS)} style={{ padding: "4px 8px" }}>렌더 설정 초기화</button>
 
       <Sect>화면 표시</Sect>

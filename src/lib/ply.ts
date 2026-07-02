@@ -85,8 +85,11 @@ const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 /** Parse a 3DGS binary_little_endian PLY into the packed (N,8) uint32 buffer.
  * Handles f_dc color + opacity/scale/rot activations; falls back to red/green/blue
  * and a tiny isotropic scale for plain colored point clouds. If a `frame` property
- * is present (our own exports), frameCum is rebuilt so the timeline replays. */
-export function parsePly(buf: ArrayBuffer): { buffer: Uint32Array; frameCum: number[] | null } {
+ * is present (our own exports), frameCum is rebuilt so the timeline replays.
+ * When degree-1 SH coefficients (f_rest_*) exist, they're packed into a side
+ * buffer (8 u32 / gaussian: 9 f16 = R0R1 R2G0 G1G2 B0B1 B2, zero-padded) for
+ * view-dependent colour in the shader. */
+export function parsePly(buf: ArrayBuffer): { buffer: Uint32Array; frameCum: number[] | null; sh1: Uint32Array | null } {
   const bytes = new Uint8Array(buf);
   const header = new TextDecoder("ascii").decode(bytes.subarray(0, Math.min(bytes.length, 1 << 16)));
   const ehIdx = header.indexOf("end_header");
@@ -126,6 +129,13 @@ export function parsePly(buf: ArrayBuffer): { buffer: Uint32Array; frameCum: num
   const hasFrame = has("frame");
   const frameOf = hasFrame ? new Uint16Array(count) : null;
 
+  // Degree-1 SH: f_rest layout is channel-major (R block, G block, B block).
+  let restPer = 0;
+  while (has(`f_rest_${restPer}`)) restPer++;
+  const shPer = restPer / 3; // coefficients per channel (3 for deg1, 15 for deg3)
+  const sh1 = restPer >= 9 && Number.isInteger(shPer) ? new Uint32Array(count * 8) : null;
+  const sh1dv = sh1 ? new DataView(sh1.buffer) : null;
+
   for (let i = 0; i < count; i++) {
     centers[i * 3] = get(i, "x")!; centers[i * 3 + 1] = get(i, "y")!; centers[i * 3 + 2] = get(i, "z")!;
     for (let k = 0; k < 3; k++) {
@@ -138,6 +148,12 @@ export function parsePly(buf: ArrayBuffer): { buffer: Uint32Array; frameCum: num
     if (hasRot) for (let k = 0; k < 4; k++) wxyz[i * 4 + k] = get(i, `rot_${k}`)!;
     else wxyz[i * 4] = 1; // identity
     if (frameOf) frameOf[i] = get(i, "frame")!;
+    if (sh1dv) {
+      const b = i * 32;
+      for (let ch = 0; ch < 3; ch++)
+        for (let k = 0; k < 3; k++)
+          sh1dv.setUint16(b + (ch * 3 + k) * 2, DataUtils.toHalfFloat(get(i, `f_rest_${ch * shPer + k}`)!), true);
+    }
   }
 
   // Rebuild cumulative per-frame counts (vertices are stored in frame order).
@@ -153,5 +169,5 @@ export function parsePly(buf: ArrayBuffer): { buffer: Uint32Array; frameCum: num
   }
 
   const covTriu = covarianceFromScaleRotation(scales, wxyz, count);
-  return { buffer: packSplats(count, centers, covTriu, rgb, opacity, false, false), frameCum };
+  return { buffer: packSplats(count, centers, covTriu, rgb, opacity, false, false), frameCum, sh1 };
 }

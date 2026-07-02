@@ -86,6 +86,9 @@ export default function App() {
   const [mode, setMode] = React.useState<"snapshot" | "delta">(() => (lsGet("mode", "snapshot") === "delta" ? "delta" : "snapshot"));
   const [maxFrames, setMaxFrames] = React.useState(() => lsGet("maxFrames", "100"));
   const [buffer, setBuffer] = React.useState<Uint32Array | null>(null);
+  // Degree-1 SH side buffer (PLY loads only): index-aligned with `buffer`,
+  // 8 u32 per gaussian. Cleared whenever indices can't be tracked.
+  const [sh1, setSh1] = React.useState<Uint32Array | null>(null);
   const [bounds, setBounds] = React.useState<Bounds | null>(null);
   const [status, setStatus] = React.useState("idle");
   const [busy, setBusy] = React.useState(false);
@@ -233,7 +236,7 @@ export default function App() {
   async function load(over?: Partial<{ host: string; runId: string; mode: "snapshot" | "delta"; maxFrames: string }>) {
     const _host = over?.host ?? host, _run = over?.runId ?? runId;
     const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
-    setBusy(true); setBuffer(null); setBounds(null); setSelection(new Set());
+    setBusy(true); setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set());
     setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
     setLive(false); liveCtxRef.current = null;
@@ -968,15 +971,15 @@ export default function App() {
   }
   async function loadLocalFile(file: File) {
     setBusy(true); setStatus(`reading ${file.name}…`);
-    setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
+    setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
       const isSplat = /\.splat$/i.test(file.name);
-      const { buffer: b, frameCum: fc } = isSplat
-        ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null }
+      const { buffer: b, frameCum: fc, sh1: sh } = isSplat
+        ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null, sh1: null }
         : parsePly(await file.arrayBuffer());
-      setBuffer(b); setBounds(computeBounds(b));
+      setBuffer(b); setSh1(sh); setBounds(computeBounds(b));
       originalBuffer.current = b.slice();
       if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
       setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}`);
@@ -989,7 +992,7 @@ export default function App() {
   // local file needed. Same reset flow as onPlyFile so the camera refits.
   async function loadTestScene(scene: { name: string; file: string }) {
     setBusy(true); setStatus(`${scene.name} 다운로드 중…`);
-    setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
+    setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     setLive(false); liveCtxRef.current = null;
@@ -1113,7 +1116,7 @@ export default function App() {
   // (selection, gizmos, scene-rotation all act on it). Keeps the camera.
   function becomeScene(name: string, b: Uint32Array) {
     setRunId(name);
-    setBuffer(b); setBounds(computeBounds(b));
+    setBuffer(b); setSh1(null); setBounds(computeBounds(b));
     originalBuffer.current = b.slice();
     setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
@@ -1265,6 +1268,22 @@ export default function App() {
     for (let j = 0; j < m; j++) out.set(display.subarray(j * stride * 8, j * stride * 8 + 8), j * 8);
     return out;
   }, [display, renderFrac]);
+
+  // SH side buffer follows the LOD subsampling (same stride) so it stays
+  // index-aligned with what's actually drawn.
+  const lodSh = React.useMemo(() => {
+    if (!sh1 || !display) return null;
+    const n = display.length / 8;
+    const stride = renderFrac >= 1 ? 1 : Math.max(1, Math.round(1 / renderFrac));
+    if (stride === 1) return sh1;
+    const m = Math.floor(n / stride);
+    const out = new Uint32Array(m * 8);
+    for (let j = 0; j < m; j++) {
+      const src = j * stride * 8;
+      if (src + 8 <= sh1.length) out.set(sh1.subarray(src, src + 8), j * 8);
+    }
+    return out;
+  }, [sh1, display, renderFrac]);
 
   const effDpr = dprAuto ? autoDprValue : dpr;
 
@@ -1863,7 +1882,7 @@ export default function App() {
               <FitCamera bounds={bounds} enabled={!camDone && !pendingView.current} onFitted={() => setCamDone(true)} />
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
-                {showMap && <SplatObject buffer={lod ?? display} />}
+                {showMap && <SplatObject buffer={lod ?? display} sh1={lodSh ?? undefined} />}
                 {compares.map((c) => c.visible && <SplatObject key={c.id} buffer={c.buffer} />)}
               </SplatRenderContext>
             </>
