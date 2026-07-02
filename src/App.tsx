@@ -40,9 +40,12 @@ const TEST_SCENES: { name: string; file: string; big?: boolean }[] = [
 ];
 
 // First-visit scene: Train auto-loads when the URL doesn't specify a run.
-// Set this to pin the starting camera ({ p: position, t: look-at target });
-// null = default origin start. Read the live pose from 통계 > 카메라.
-const DEFAULT_TEST_VIEW: { p: [number, number, number]; t: [number, number, number] } | null = null;
+// Pinned starting camera: position (-4.38, -2.92, 0.72) looking along
+// (0.76, 0.59, -0.26); target = position + direction × 5 (orbit pivot).
+const DEFAULT_TEST_VIEW: { p: [number, number, number]; t: [number, number, number] } | null = {
+  p: [-4.38, -2.92, 0.72],
+  t: [-0.58, 0.03, -0.58],
+};
 
 // Persist the load inputs (server url / run / mode / frames) across visits.
 const LS = "vwd:";
