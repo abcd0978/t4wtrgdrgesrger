@@ -11,6 +11,7 @@ import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./Rende
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, AdaptiveRotateSpeed, AutoOrbit, CameraPath, ClipSweep, type CamPose, type CameraApi, type GridOpts, type DragRect } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
+import { splatToPacked, fetchWithProgress } from "./lib/splatFile";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
@@ -24,6 +25,19 @@ type Group = { id: number; name: string; indices: number[]; hidden: boolean; col
 type CompareItem = { id: number; name: string; buffer: Uint32Array; visible: boolean };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const FPS_MIN = 0.5, FPS_MAX = 60;
+
+// Public demo .splat scenes (the ones the antimatter15/splat demo streams),
+// hosted on Hugging Face with CORS enabled — handy for testing without a server.
+const TEST_SCENE_CDN = "https://huggingface.co/cakewalk/splat-data/resolve/main/";
+const TEST_SCENES: { name: string; file: string; big?: boolean }[] = [
+  { name: "Train", file: "train.splat" },
+  { name: "Truck", file: "truck.splat" },
+  { name: "Plush", file: "plush.splat" },
+  { name: "Bicycle", file: "bicycle.splat", big: true },
+  { name: "Garden", file: "garden.splat", big: true },
+  { name: "Stump", file: "stump.splat", big: true },
+  { name: "Treehill", file: "treehill.splat", big: true },
+];
 
 // Persist the load inputs (server url / run / mode / frames) across visits.
 const LS = "vwd:";
@@ -668,9 +682,9 @@ export default function App() {
     setStatus(`exported ${sel.length} selected (.ply)`);
   }
 
-  // Load a local .ply file into the viewer (no server needed). Clears the view
-  // before the await so the camera refits to the new file; restores the timeline
-  // when the file carries frame info.
+  // Load a local .ply / .splat file into the viewer (no server needed). Clears
+  // the view before the await so the camera refits to the new file; restores
+  // the timeline when the file carries frame info.
   async function onPlyFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file
@@ -680,13 +694,45 @@ export default function App() {
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
-      const { buffer: b, frameCum: fc } = parsePly(await file.arrayBuffer());
+      const isSplat = /\.splat$/i.test(file.name);
+      const { buffer: b, frameCum: fc } = isSplat
+        ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null }
+        : parsePly(await file.arrayBuffer());
       setBuffer(b); setBounds(computeBounds(b));
       originalBuffer.current = b.slice();
       if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
       setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}`);
     } catch (err) {
       setStatus("ply error: " + (err as Error).message);
+    } finally { setBusy(false); }
+  }
+
+  // Load a public demo scene (.splat from the Hugging Face CDN) — no server or
+  // local file needed. Same reset flow as onPlyFile so the camera refits.
+  async function loadTestScene(scene: { name: string; file: string }) {
+    setBusy(true); setStatus(`${scene.name} 다운로드 중…`);
+    setBuffer(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
+    setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
+    setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
+    setLive(false); liveCtxRef.current = null;
+    try {
+      let lastPct = -1;
+      const data = await fetchWithProgress(TEST_SCENE_CDN + scene.file, (loaded, total) => {
+        const mb = (loaded / 1048576).toFixed(1);
+        const pct = total > 0 ? Math.floor((loaded / total) * 100) : -1;
+        if (pct !== lastPct) { // throttle status updates to 1% steps
+          lastPct = pct;
+          setStatus(pct >= 0 ? `${scene.name} 다운로드 ${pct}% (${mb} MB)` : `${scene.name} 다운로드 ${mb} MB…`);
+        }
+      });
+      setStatus(`${scene.name} 변환 중…`);
+      const b = splatToPacked(data, true /* COLMAP y-down -> viewer z-up */);
+      setRunId(scene.name);
+      setBuffer(b); setBounds(computeBounds(b));
+      originalBuffer.current = b.slice();
+      setStatus(`${scene.name}: ${(b.length / 8).toLocaleString()} gaussians`);
+    } catch (err) {
+      setStatus(`테스트 씬 오류: ${(err as Error).message} (네트워크/CORS 확인)`);
     } finally { setBusy(false); }
   }
 
@@ -1001,15 +1047,22 @@ export default function App() {
         </select>
         {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" className="menu-only" style={{ width: 56 }} />}
         <button className="accent" onClick={() => load()} disabled={busy}>{busy ? "…" : "Load"}</button>
-        <input ref={fileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onPlyFile} />
+        <input ref={fileRef} type="file" accept=".ply,.splat" style={{ display: "none" }} onChange={onPlyFile} />
         <Dropdown label="파일" className="menu-only">
-          <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY 열기</button>
+          <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY/SPLAT 열기</button>
           <button onClick={exportPly} disabled={!buffer}>.ply 내보내기</button>
           <button onClick={exportNpz} disabled={!buffer}>.npz 내보내기</button>
           <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
           <button onClick={() => captureHiRes(2)} disabled={!buffer}>스크린샷 2×</button>
           <button onClick={() => captureHiRes(4)} disabled={!buffer}>스크린샷 4×</button>
           <button onClick={share} disabled={!buffer}>URL 공유</button>
+        </Dropdown>
+        <Dropdown label="테스트" className="menu-only">
+          {TEST_SCENES.map((s) => (
+            <button key={s.file} onClick={() => loadTestScene(s)} disabled={busy} title={`${TEST_SCENE_CDN}${s.file}`}>
+              {s.name}{s.big ? " (대용량)" : ""}
+            </button>
+          ))}
         </Dropdown>
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
         <button onClick={redo} disabled={redoStack.length === 0}>redo</button>
