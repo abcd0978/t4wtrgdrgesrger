@@ -186,7 +186,9 @@ export function InputController({
     const el = gl.domElement;
     let lastUp = 0, lx = 0, ly = 0, sel = false, sx = 0, sy = 0;
 
-    // Nearest visible gaussian to a screen point, or -1.
+    // Front-most gaussian near a screen point, or -1. Among everything within
+    // the pick radius, prefer the one closest to the CAMERA (not the cursor),
+    // so clicking a surface never grabs something hidden behind it.
     function pickNearest(x0: number, y0: number): number {
       const buffer = bufferRef.current;
       if (!buffer) return -1;
@@ -194,14 +196,16 @@ export function InputController({
       const dv = new DataView(buffer.buffer);
       const n = buffer.length / 8;
       const v = new THREE.Vector3();
-      let best = -1, bestD = 400;
+      let best = -1, bestCam = Infinity;
       for (let i = 0; i < n; i++) {
         const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
-        v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)).project(camera);
+        v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+        const camD = v.distanceTo(camera.position);
+        v.project(camera);
         if (v.z < -1 || v.z > 1) continue;
         const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
-        const d = (px - x0) ** 2 + (py - y0) ** 2;
-        if (d < bestD) { bestD = d; best = i; }
+        if ((px - x0) ** 2 + (py - y0) ** 2 > 400) continue;
+        if (camD < bestCam) { bestCam = camD; best = i; }
       }
       return best;
     }
@@ -214,17 +218,43 @@ export function InputController({
         const best = pickNearest(x0, y0);
         if (best >= 0) out.add(best);
       } else {
+        // Box select, occlusion-aware: instead of selecting everything the
+        // rectangle pierces ("laser beam"), keep only the VISIBLE surface —
+        // the rect is split into screen cells, each cell records its nearest
+        // depth, and only gaussians within 8% of that front depth survive.
         const { camera, w, h } = env.current;
         const dv = new DataView(buffer.buffer);
         const n = buffer.length / 8;
         const v = new THREE.Vector3();
         const minX = Math.min(x0, x1), maxX = Math.max(x0, x1), minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+        const CELL = 24;
+        const cols = Math.max(1, Math.ceil(w / CELL));
+        const minDist = new Map<number, number>();
+        // Pass 1: nearest camera distance per cell.
         for (let i = 0; i < n; i++) {
           const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
-          v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)).project(camera);
+          v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+          const camD = v.distanceTo(camera.position);
+          v.project(camera);
           if (v.z < -1 || v.z > 1) continue;
           const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
-          if (px >= minX && px <= maxX && py >= minY && py <= maxY) out.add(i);
+          if (px < minX || px > maxX || py < minY || py > maxY) continue;
+          const cell = Math.floor(px / CELL) + Math.floor(py / CELL) * cols;
+          const cur = minDist.get(cell);
+          if (cur === undefined || camD < cur) minDist.set(cell, camD);
+        }
+        // Pass 2: keep only the front shell (re-projecting beats storing
+        // per-gaussian results — zero extra memory on multi-million scenes).
+        for (let i = 0; i < n; i++) {
+          const b = i * 32; if (dv.getUint8(b + 31) === 0) continue;
+          v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+          const camD = v.distanceTo(camera.position);
+          v.project(camera);
+          if (v.z < -1 || v.z > 1) continue;
+          const px = (v.x * 0.5 + 0.5) * w, py = (-v.y * 0.5 + 0.5) * h;
+          if (px < minX || px > maxX || py < minY || py > maxY) continue;
+          const lim = minDist.get(Math.floor(px / CELL) + Math.floor(py / CELL) * cols);
+          if (lim !== undefined && camD <= lim * 1.08) out.add(i);
         }
       }
       setSelection(out);
