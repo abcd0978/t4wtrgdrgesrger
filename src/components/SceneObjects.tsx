@@ -634,28 +634,26 @@ export function RotateHandle({
   );
 }
 
-/** Keep the felt control speeds constant everywhere.
- * - rotateSpeed pinned (no proximity-based slowdown). Touch devices get a
- *   lower constant: finger drags cover much more of the small screen than a
- *   mouse does, so 1.0 feels twitchy on phones.
- * - zoomSpeed compensates OrbitControls' distance-proportional dolly step
- *   (∝ 1/dist, clamped) so wheel/pinch zoom feels the same at any range; the
- *   boost is capped lower on touch since pinch applies it exponentially. */
+/** Keep the felt control speeds constant everywhere, driven by exactly two
+ * user knobs — 회전 감도 and 확대 감도 — that apply to mouse AND touch.
+ * - rotate: no proximity-based slowdown; on touch a fixed internal factor
+ *   attenuates the same knob (finger drags cover much more of a small screen).
+ * - zoom: compensates OrbitControls' distance-proportional dolly step
+ *   (∝ 1/dist, clamped; lower cap on touch since pinch applies zoomSpeed
+ *   exponentially), then scales by the zoom knob. */
 const IS_COARSE_POINTER =
   typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+const TOUCH_ROTATE_FACTOR = 0.05;
 
-export function ConstantControlSpeed({ sceneRadius, touchSens = 0.05, rotateSens = 1 }: { sceneRadius: number; touchSens?: number; rotateSens?: number }) {
+export function ConstantControlSpeed({ sceneRadius, rotateSens = 1, zoomSens = 1 }: { sceneRadius: number; rotateSens?: number; zoomSens?: number }) {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
-    // 회전 감도 scales rotation on BOTH platforms; touch additionally applies
-    // its own factor (finger drags cover more of a small screen).
-    controls.rotateSpeed = rotateSens * (IS_COARSE_POINTER ? touchSens : 1);
+    controls.rotateSpeed = rotateSens * (IS_COARSE_POINTER ? TOUCH_ROTATE_FACTOR : 1);
     const dist = camera.position.distanceTo(controls.target);
     const boost = (sceneRadius || 1) / Math.max(dist, 1e-6);
-    const zoomCap = IS_COARSE_POINTER ? Math.max(1.5, touchSens * 24) : 30;
-    controls.zoomSpeed = Math.min(zoomCap, Math.max(1, boost));
+    controls.zoomSpeed = zoomSens * Math.min(IS_COARSE_POINTER ? 1.5 : 30, Math.max(1, boost));
   });
   return null;
 }

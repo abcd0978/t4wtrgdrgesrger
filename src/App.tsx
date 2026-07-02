@@ -115,24 +115,23 @@ export default function App() {
   const [autoDprValue, setAutoDprValue] = React.useState(nativeDpr);
   const [dpr, setDpr] = React.useState(1.5); // manual value when auto is off
   const [antialias, setAntialias] = React.useState(false);
-  // Touch control sensitivity (rotate + pinch), persisted; desktop unaffected.
-  // Key versioned to v2 so the new 0.05 default reaches devices that stored
-  // the old default under the previous key.
-  const [touchSens, setTouchSens] = React.useState(() => {
-    const v = parseFloat(lsGet("touchSens2", "0.05"));
-    return Number.isFinite(v) && v > 0 ? v : 0.05;
-  });
-  // Desktop (mouse) rotate sensitivity, persisted.
+  // Control sensitivities (persisted). Two knobs only: rotate and zoom, both
+  // applying to mouse AND touch — the touch-specific attenuation is a fixed
+  // internal factor inside ConstantControlSpeed.
   const [rotateSens, setRotateSens] = React.useState(() => {
     const v = parseFloat(lsGet("rotateSens", "1"));
     return Number.isFinite(v) && v > 0 ? v : 1;
   });
+  const [zoomSens, setZoomSens] = React.useState(() => {
+    const v = parseFloat(lsGet("zoomSens", "1"));
+    return Number.isFinite(v) && v > 0 ? v : 1;
+  });
   React.useEffect(() => {
     try {
-      localStorage.setItem(LS + "touchSens2", String(touchSens));
       localStorage.setItem(LS + "rotateSens", String(rotateSens));
+      localStorage.setItem(LS + "zoomSens", String(zoomSens));
     } catch { /* ignore */ }
-  }, [touchSens, rotateSens]);
+  }, [rotateSens, zoomSens]);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -1338,7 +1337,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, touchSens, setTouchSens, rotateSens, setRotateSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}
@@ -1584,7 +1583,7 @@ export default function App() {
       <Canvas key={antialias ? "gl-aa" : "gl"} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} />
-        {bounds && <ConstantControlSpeed sceneRadius={radius(bounds)} touchSens={touchSens} rotateSens={rotateSens} />}
+        {bounds && <ConstantControlSpeed sceneRadius={radius(bounds)} rotateSens={rotateSens} zoomSens={zoomSens} />}
         <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
         <CameraPath recording={camRecording} playing={touring || camReplaying} loop={touring} recRef={camRecRef} path={touring ? tourPoses : camPath} seekMs={camSeekMs} onProgress={touring ? () => {} : setCamSeekMs} onPlayEnd={() => { setCamReplaying(false); if (videoRecRef.current) videoRecRef.current.stop(); }} />
         {bounds && <ClipSweep enabled={clipSweep && settings.clipAxis >= 0} min={bounds.min[Math.max(0, settings.clipAxis)]} max={bounds.max[Math.max(0, settings.clipAxis)]} setPos={(v) => setSettings((s) => ({ ...s, clipPos: v }))} />}

@@ -40,8 +40,8 @@ export interface SceneOpts {
   dprAuto: boolean; setDprAuto: (v: boolean) => void;
   effDpr: number; // what the canvas actually uses (auto-resolved or manual)
   antialias: boolean; setAntialias: (v: boolean) => void; // toggling recreates the GL context
-  touchSens: number; setTouchSens: (v: number) => void; // touch-device rotate/pinch sensitivity
-  rotateSens: number; setRotateSens: (v: number) => void; // desktop mouse rotate sensitivity
+  rotateSens: number; setRotateSens: (v: number) => void; // rotate sensitivity (mouse + touch)
+  zoomSens: number; setZoomSens: (v: number) => void; // zoom sensitivity (wheel + pinch)
   showAxes: boolean; setShowAxes: (v: boolean) => void;
   renderFrac: number; setRenderFrac: (v: number) => void;
   setView: (dir: [number, number, number]) => void;
@@ -59,7 +59,7 @@ export function SettingsPanel({
   scene: SceneOpts;
   onClose: () => void;
 }) {
-  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, touchSens, setTouchSens, rotateSens, setRotateSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
+  const { bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds } = scene;
   const disabledLayer = { ...row, opacity: 0.45 } as const;
   const ca = settings.clipAxis;
   const { off, startDrag } = useDragOffset();
@@ -99,15 +99,15 @@ export function SettingsPanel({
       </label>
 
       <Sect>조작</Sect>
-      <label style={row} title="터치 기기에서의 회전·핀치 민감도 (데스크톱 마우스에는 영향 없음)">
-        <span style={{ width: 84 }}>터치 감도</span>
-        <input type="range" min={0.01} max={0.2} step={0.01} value={touchSens} onChange={(e) => setTouchSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
-        <span style={{ width: 46, textAlign: "right" }}>{touchSens.toFixed(2)}</span>
-      </label>
-      <label style={row} title="드래그 회전 민감도 — 마우스·터치 모두 적용 (터치는 터치 감도 × 회전 감도)">
+      <label style={row} title="드래그 회전 민감도 — 마우스·터치 모두 적용 (터치는 자동으로 약하게 보정됨)">
         <span style={{ width: 84 }}>회전 감도</span>
         <input type="range" min={0.1} max={2} step={0.05} value={rotateSens} onChange={(e) => setRotateSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
         <span style={{ width: 46, textAlign: "right" }}>{rotateSens.toFixed(2)}</span>
+      </label>
+      <label style={row} title="확대 민감도 — 휠·핀치 모두 적용">
+        <span style={{ width: 84 }}>확대 감도</span>
+        <input type="range" min={0.1} max={2} step={0.05} value={zoomSens} onChange={(e) => setZoomSens(parseFloat(e.target.value))} style={{ flex: 1 }} />
+        <span style={{ width: 46, textAlign: "right" }}>{zoomSens.toFixed(2)}</span>
       </label>
 
       <Sect>렌더 (스플랫 모양)</Sect>
