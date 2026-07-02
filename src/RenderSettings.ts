@@ -18,6 +18,8 @@ export interface RenderSettings {
   cropOn: number; // 1 = crop-box preview active (shader-side, non-destructive)
   cropMin: [number, number, number]; // crop box corners (world coords)
   cropMax: [number, number, number];
+  wipeOn: number; // 1 = A/B wipe: main scene left of the divider, overlays right
+  wipePos: number; // divider position as a screen fraction (0..1)
 }
 
 // Defaults match antimatter15/splat's (hardcoded) shader behaviour: no size
@@ -43,6 +45,8 @@ export const DEFAULT_SETTINGS: RenderSettings = {
   cropOn: 0,
   cropMin: [0, 0, 0],
   cropMax: [0, 0, 0],
+  wipeOn: 0,
+  wipePos: 0.5,
 };
 
 export const RenderSettingsContext = createContext<RenderSettings>(DEFAULT_SETTINGS);

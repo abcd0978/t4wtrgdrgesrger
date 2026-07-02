@@ -37,6 +37,8 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     cropEnable: 0.0,
     cropMin: /* @__PURE__ */ new THREE.Vector3(),
     cropMax: /* @__PURE__ */ new THREE.Vector3(),
+    wipeEnable: 0.0,
+    wipePos: 0.5,
   },
   `precision highp usampler2D; // Most important: ints must be 32-bit.
   // highp float is critical on mobile: Apple GPUs really evaluate mediump as
@@ -85,6 +87,7 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
 
   out vec4 vRgba;
   out vec2 vPosition;
+  flat out float vWipeB; // 0 = main scene (group 0), 1 = compare overlays
 
   #include <fog_pars_vertex>
 
@@ -115,6 +118,7 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
     // Fetch from textures.
     uvec4 floatBufferData = texelFetch(textureBuffer, texPos0, 0);
     mat4 T_camera_group = getGroupTransform(floatBufferData.w);
+    vWipeB = floatBufferData.w == 0u ? 0.0 : 1.0;
 
     // Any early return will discard the fragment.
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
@@ -220,13 +224,20 @@ const GaussianSplatMaterial = /* @__PURE__ */ shaderMaterial(
   uniform vec2 viewport;
   uniform float falloffCutoff;
   uniform float alphaTest;
+  uniform float wipeEnable; // A/B wipe: main scene left, overlays right
+  uniform float wipePos;
 
   in vec4 vRgba;
   in vec2 vPosition;
+  flat in float vWipeB;
 
   #include <fog_pars_fragment>
 
   void main () {
+    if (wipeEnable > 0.5) {
+      float fx = gl_FragCoord.x / viewport.x;
+      if (vWipeB < 0.5 ? fx > wipePos : fx < wipePos) discard;
+    }
     float A = -dot(vPosition, vPosition);
     if (A < -falloffCutoff) discard;
     float B = exp(A) * vRgba.a;

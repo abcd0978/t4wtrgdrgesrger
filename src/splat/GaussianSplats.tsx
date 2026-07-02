@@ -641,6 +641,8 @@ function SplatRendererImpl() {
     uniforms.cropEnable.value = settings.cropOn;
     (uniforms.cropMin.value as THREE.Vector3).fromArray(settings.cropMin);
     (uniforms.cropMax.value as THREE.Vector3).fromArray(settings.cropMax);
+    uniforms.wipeEnable.value = settings.wipeOn;
+    uniforms.wipePos.value = settings.wipePos;
     uniforms.transitionInState.value = Math.min(
       uniforms.transitionInState.value + delta * settings.fadeSpeed,
       1.0,

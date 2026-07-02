@@ -43,6 +43,24 @@ const TEST_SCENES: { name: string; file: string; big?: boolean }[] = [
 const LS = "vwd:";
 const lsGet = (k: string, d: string) => { try { return localStorage.getItem(LS + k) ?? d; } catch { return d; } };
 
+// Tiny inline bar histogram for the stats panel.
+function Hist({ data, label, sub }: { data: number[]; label: string; sub?: string }) {
+  const max = Math.max(...data, 1);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <span className="muted" style={{ fontSize: 11 }}>{label}</span>
+        {sub && <span className="num muted" style={{ fontSize: 10 }}>{sub}</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 34 }}>
+        {data.map((v, i) => (
+          <div key={i} style={{ flex: 1, height: `${(v / max) * 100}%`, minHeight: v > 0 ? 2 : 0, background: "var(--accent)", opacity: 0.8, borderRadius: 1 }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const HELP = [
   ["드래그", "카메라 회전"],
   ["스크롤", "확대 / 축소"],
@@ -1110,9 +1128,29 @@ export default function App() {
     const slots = buffer.length / 8;
     let live = 0;
     for (let i = 0; i < slots; i++) if (dv.getUint8(i * 32 + 31) !== 0) live++;
+    // Distribution histograms (sub-sampled): opacity (u8) and splat size
+    // (sqrt of mean covariance diagonal — a linear "radius" feel).
+    const BINS = 24;
+    const opHist = new Array<number>(BINS).fill(0);
+    const sizes: number[] = [];
+    const cov = [0, 0, 0, 0, 0, 0];
+    const step = Math.max(1, Math.floor(slots / 200_000));
+    for (let i = 0; i < slots; i += step) {
+      const b = i * 32;
+      const a = dv.getUint8(b + 31);
+      if (a === 0) continue;
+      opHist[Math.min(BINS - 1, Math.floor(((a - 1) / 255) * BINS))]++;
+      readCov6(dv, b, cov);
+      sizes.push(Math.sqrt(Math.max(0, (cov[0] + cov[3] + cov[5]) / 3)));
+    }
+    sizes.sort((x, y) => x - y);
+    const sizeP95 = sizes[Math.floor(sizes.length * 0.95)] || 1e-9;
+    const sizeHist = new Array<number>(BINS).fill(0);
+    for (const s of sizes) sizeHist[Math.min(BINS - 1, Math.floor((s / sizeP95) * (BINS - 1)))]++;
     return {
       live, slots, mb: buffer.byteLength / 1048576,
       size: [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]] as const,
+      opHist, sizeHist, sizeP95,
     };
   }, [showStats, buffer, bounds]);
 
@@ -1459,6 +1497,12 @@ export default function App() {
           {compares.length > 0 && (
             <>
               <hr className="divider" />
+              <label className="row" title="화면을 좌(현재 씬) / 우(오버레이)로 나눠 비교 — 가운데 선을 드래그">
+                <input type="checkbox" checked={settings.wipeOn === 1}
+                  onChange={(e) => setSettings((s) => ({ ...s, wipeOn: e.target.checked ? 1 : 0 }))} />
+                A/B 와이프 <span className="muted" style={{ fontSize: 11 }}>(좌: 현재 씬 · 우: 오버레이)</span>
+              </label>
+              <hr className="divider" />
               <span className="muted" style={{ fontSize: 12 }}>겹친 run · "편집"으로 씬 전환, "합치기"로 하나로</span>
               {compares.map((c) => (
                 <div key={c.id} className="row" style={{ gap: 5 }}>
@@ -1590,6 +1634,9 @@ export default function App() {
               <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">새 가우시안</span><span className="num">+{(frameCum[frameIdx] - (frameIdx > 0 ? frameCum[frameIdx - 1] : 0)).toLocaleString()}</span></div>
             )}
             <hr className="divider" />
+            <Hist data={stats.opHist} label="불투명도 분포" sub="0 → 255" />
+            <Hist data={stats.sizeHist} label="크기 분포" sub={`0 → ${stats.sizeP95.toPrecision(2)} (p95)`} />
+            <hr className="divider" />
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">서버 연결</span><span className="num" style={{ color: serverOk === false ? "var(--danger)" : serverOk ? "#33e08a" : "var(--text-dim)" }}>{serverOk === false ? "끊김" : serverOk ? "OK" : "—"}</span></div>
             <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">마지막 업데이트</span><span className="num">{lastUpdate || "—"}</span></div>
             {live && <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">라이브</span><span className="num" style={{ color: "#33e08a" }}>● 폴링 중</span></div>}
@@ -1621,6 +1668,29 @@ export default function App() {
           width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0),
           border: "1.5px solid var(--accent)", background: "rgba(255,139,61,0.15)", borderRadius: 4,
         }} />
+      )}
+
+      {settings.wipeOn === 1 && (
+        <div
+          style={{ position: "absolute", top: 0, bottom: 0, left: `calc(${settings.wipePos * 100}% - 10px)`, width: 20, zIndex: 5, cursor: "ew-resize", touchAction: "none" }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            const onMove = (ev: PointerEvent) => {
+              const p = Math.min(0.98, Math.max(0.02, ev.clientX / window.innerWidth));
+              setSettings((s) => ({ ...s, wipePos: p }));
+            };
+            const onUp = () => {
+              window.removeEventListener("pointermove", onMove);
+              window.removeEventListener("pointerup", onUp);
+            };
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+          }}
+        >
+          <div style={{ position: "absolute", left: 9, top: 0, bottom: 0, width: 2, background: "var(--accent)" }} />
+          <div className="panel" style={{ position: "absolute", top: "50%", left: -22, transform: "translateY(-50%)", padding: "4px 8px", fontSize: 11, whiteSpace: "nowrap", pointerEvents: "none" }}>◂ A · B ▸</div>
+        </div>
       )}
 
       {dragOver && (
