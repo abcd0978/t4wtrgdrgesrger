@@ -33,7 +33,8 @@ function ScreenSphere({ position, px, color }: { position: [number, number, numb
 
 type Controls = { target: { set: (x: number, y: number, z: number) => void }; update: () => void } | null;
 
-/** Fit the camera to the data (z-up, like viser). Repositions only on the first
+/** Initial camera on load: start AT the world origin (usually the capture /
+ * reference origin) looking at the data centre, z-up. Runs only on the first
  * enabled fit; near/far track bounds every load so reloads don't re-aim the
  * camera (keeps your current view) but also don't clip. */
 export function FitCamera({ bounds, enabled = true, onFitted }: { bounds: Bounds; enabled?: boolean; onFitted?: () => void }) {
@@ -47,11 +48,13 @@ export function FitCamera({ bounds, enabled = true, onFitted }: { bounds: Bounds
     camera.updateProjectionMatrix();
     if (!enabled || fitted.current) return;
     fitted.current = true;
-    const c = center(bounds), d = r * 2.5 + 1;
+    const c = center(bounds);
     camera.up.set(0, 0, 1);
-    camera.position.set(c[0] + d, c[1] - d, c[2] + d);
-    if (controls?.target) { controls.target.set(c[0], c[1], c[2]); controls.update(); }
-    else camera.lookAt(c[0], c[1], c[2]);
+    camera.position.set(0, 0, 0);
+    // If the data centre coincides with the origin, aim at -y instead of itself.
+    const t = Math.hypot(c[0], c[1], c[2]) > r * 1e-3 ? c : [0, -1, 0];
+    if (controls?.target) { controls.target.set(t[0], t[1], t[2]); controls.update(); }
+    else camera.lookAt(t[0], t[1], t[2]);
     onFitted?.();
   }, [bounds, camera, controls, enabled, onFitted]);
   return null;
@@ -631,7 +634,11 @@ export function RotateHandle({
 /** Scale OrbitControls rotate speed by how close the camera is to actual content
  * (nearest gaussian, sub-sampled), not the orbit target — so rotation stays calm
  * whenever you're near the data, however you got there (zoom, fly, or teleport).
- * Falls back to camera↔target distance when there's no buffer. */
+ * Falls back to camera↔target distance when there's no buffer.
+ *
+ * Zoom is the opposite: OrbitControls' dolly step shrinks with distance to the
+ * target, so zooming crawls near objects. Compensate with zoomSpeed ∝ 1/dist
+ * (clamped) so the felt zoom speed stays the same everywhere. */
 export function AdaptiveRotateSpeed({
   sceneRadius, bufferRef,
 }: {
@@ -639,7 +646,7 @@ export function AdaptiveRotateSpeed({
   bufferRef: React.MutableRefObject<Uint32Array | null>;
 }) {
   const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number } | null;
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; rotateSpeed: number; zoomSpeed: number } | null;
   useFrame(() => {
     if (!controls) return;
     const buf = bufferRef.current;
@@ -660,6 +667,10 @@ export function AdaptiveRotateSpeed({
       if (min2 < Infinity) dist = Math.sqrt(min2);
     }
     controls.rotateSpeed = Math.min(1, Math.max(0.1, dist / (sceneRadius || 1)));
+    // Constant felt zoom speed: the dolly step is ∝ camera↔target distance, so
+    // boost zoomSpeed as the target gets close (wheel and pinch both benefit).
+    const targetDist = camera.position.distanceTo(controls.target);
+    controls.zoomSpeed = Math.min(30, Math.max(1, (sceneRadius || 1) / Math.max(targetDist, 1e-6)));
   });
   return null;
 }
