@@ -986,13 +986,10 @@ export default function App() {
       maxFrames: src?.kind === "server" ? maxFrames : undefined,
       test: src?.kind === "test" ? src.file : undefined,
       cam: v ?? undefined,
-      sel: selection.size > 0 ? [...selection] : undefined,
       rs: rsShare as unknown as Record<string, unknown>,
       sc: { bg, showMap, showGrid, grid, showAxes, dprAuto, dpr, renderFrac },
     });
-    const note =
-      src?.kind === "local" ? " (로컬 파일 씬은 링크에 담을 수 없어 카메라·설정만 공유됨)" :
-      selection.size > 500 ? " (선택이 500개를 넘어 링크에서 제외됨)" : "";
+    const note = src?.kind === "local" ? " (로컬 파일 씬은 링크에 담을 수 없어 카메라·설정만 공유됨)" : "";
     const c = navigator.clipboard;
     if (c) c.writeText(url).then(() => setStatus("공유 링크 복사됨" + note)).catch(() => setStatus(url));
     else setStatus(url);
