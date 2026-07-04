@@ -20,7 +20,7 @@ import { lsGet, lsSet, lsNum, lsBool, lsJson } from "./lib/storage";
 import { parseCamPose, formatCamPose } from "./lib/camPose";
 import { Hist, HELP } from "./components/Hist";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, NotesView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, NotesView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, ContextLossGuard, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked, subsamplePacked } from "./lib/splatFile";
@@ -120,6 +120,23 @@ export default function App() {
   // Manual DPR value used when auto is off.
   const [dpr, setDpr] = React.useState(() => lsNum("dprManual", 1.5, Number.MIN_VALUE));
   const [antialias, setAntialias] = React.useState(false);
+  // WebGL context-loss recovery. On loss we remount the Canvas (glEpoch key)
+  // so all GPU resources rebuild from the JS-side buffers; glLost drives a
+  // brief "recovering" overlay.
+  const [glEpoch, setGlEpoch] = React.useState(0);
+  const [glLost, setGlLost] = React.useState(false);
+  const onGlLost = React.useCallback(() => {
+    const cur = camApiRef.current?.get();
+    if (cur) pendingView.current = { p: cur.p, t: cur.t }; // restore view after remount
+    setGlLost(true);
+    setStatus("렌더러 컨텍스트 손실 — 복구 중…");
+  }, []);
+  const onGlRestored = React.useCallback(() => {
+    setGlLost(false);
+    setCamDone(false);
+    setGlEpoch((e) => e + 1); // remount Canvas to rebuild GPU state cleanly
+    setStatus("렌더러 복구됨");
+  }, []);
   // Control sensitivities (persisted). Two knobs only: rotate and zoom, both
   // applying to mouse AND touch — the touch-specific attenuation is a fixed
   // internal factor inside ConstantControlSpeed.
@@ -1814,9 +1831,10 @@ export default function App() {
           costs fill-rate. preserveDrawingBuffer off: skips the per-frame
           backbuffer copy; CanvasCapture re-renders right before reading pixels
           instead, and captureStream (video export) grabs frames as they draw. */}
-      <Canvas key={antialias ? "gl-aa" : "gl"} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+      <Canvas key={`${antialias ? "gl-aa" : "gl"}:${glEpoch}`} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} enableZoom={false} enableRotate={false} />
+        <ContextLossGuard onLost={onGlLost} onRestored={onGlRestored} />
         <ConstantControlSpeed moveSens={moveSens} />
         <GestureControls sceneRadius={bounds ? radius(bounds) : 1} zoomSens={zoomSens} rotateSens={rotateSens} />
         <AutoOrbit enabled={autoOrbit && !camReplaying && !touring} speed={autoOrbitSpeed} />
@@ -1856,6 +1874,16 @@ export default function App() {
           )}
         </RenderSettingsContext.Provider>
       </Canvas>
+      {glLost && (
+        <div style={{
+          position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+          background: "rgba(0,0,0,0.6)", color: "#eee", fontFamily: "system-ui, sans-serif", pointerEvents: "none",
+        }}>
+          <div style={{ padding: "12px 18px", borderRadius: 10, background: "rgba(20,20,20,0.9)", fontSize: 14 }}>
+            렌더러 복구 중…
+          </div>
+        </div>
+      )}
     </div>
   );
 }

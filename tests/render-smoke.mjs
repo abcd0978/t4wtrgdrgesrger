@@ -115,12 +115,14 @@ try {
   });
   await page.waitForFunction(() => /loaded .*gaussians|3 gaussians/i.test(document.body.innerText), null, { timeout: 15_000 }).catch(() => {});
 
-  // Poll: nudge the camera (tiny drag forces a real sort pass) and sample the
-  // centre pixel until the scene has rendered, up to ~8s.
+  // One tiny drag forces a real sort pass; nudge back so the net camera
+  // rotation is ~zero (repeated one-way drags would rotate the splat off the
+  // centre). Then poll the centre pixel until the frame renders (~9s cap) —
+  // swiftshader can take a moment to produce the first sorted frame.
+  await page.mouse.move(320, 300); await page.mouse.down();
+  await page.mouse.move(340, 300, { steps: 4 }); await page.mouse.move(320, 300, { steps: 4 }); await page.mouse.up();
   let r = 0, g = 0, b = 0;
-  for (let attempt = 0; attempt < 12; attempt++) {
-    await page.mouse.move(320, 300); await page.mouse.down();
-    await page.mouse.move(322 + attempt, 300, { steps: 3 }); await page.mouse.up();
+  for (let attempt = 0; attempt < 15; attempt++) {
     await page.waitForTimeout(600);
     ([r, g, b] = pngCentre(await page.screenshot()));
     if (r > 150 || b > 150) break; // something rendered at the centre

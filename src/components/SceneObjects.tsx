@@ -10,6 +10,27 @@ export interface DragRect { x0: number; y0: number; x1: number; y1: number }
 
 const DEG = Math.PI / 180;
 
+/** WebGL context-loss recovery. On mobile a backgrounded tab or GPU-memory
+ * pressure can lose the GL context, which otherwise leaves a frozen/blank
+ * canvas. We preventDefault on `webglcontextlost` (so the browser is allowed to
+ * restore it) and let App remount the Canvas to rebuild all GPU resources
+ * (the packed buffers still live in JS memory). */
+export function ContextLossGuard({ onLost, onRestored }: { onLost: () => void; onRestored: () => void }) {
+  const gl = useThree((s) => s.gl);
+  React.useEffect(() => {
+    const canvas = gl.domElement;
+    const lost = (e: Event) => { e.preventDefault(); onLost(); };
+    const restored = () => onRestored();
+    canvas.addEventListener("webglcontextlost", lost as EventListener, false);
+    canvas.addEventListener("webglcontextrestored", restored as EventListener, false);
+    return () => {
+      canvas.removeEventListener("webglcontextlost", lost as EventListener, false);
+      canvas.removeEventListener("webglcontextrestored", restored as EventListener, false);
+    };
+  }, [gl, onLost, onRestored]);
+  return null;
+}
+
 /** World-space size that projects to a constant `px` on screen at `worldPos`
  * (so gizmos look the same size regardless of camera distance). */
 function screenWorldScale(camera: THREE.Camera, worldPos: THREE.Vector3, viewportH: number, px: number): number {
