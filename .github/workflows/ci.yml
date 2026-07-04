@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    # Ships the Chromium build that matches playwright-core 1.61.1, so the render
+    # smoke test finds a browser without a separate `playwright install` step.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit / round-trip tests
+        run: npm test
+
+      - name: Render smoke test (occlusion / sort pipeline)
+        run: |
+          npm run preview -- --port 4173 --strictPort &
+          SERVER_PID=$!
+          # render-smoke.mjs waits for the server itself (up to 30s).
+          SMOKE_URL=http://localhost:4173 npm run test:smoke
+          RC=$?
+          kill "$SERVER_PID" 2>/dev/null || true
+          exit $RC
