@@ -301,6 +301,30 @@ export default function App() {
     const text = JSON.stringify({ p: r3(camPose.p), t: r3(camPose.t) });
     navigator.clipboard?.writeText(text).then(() => setStatus(`카메라 좌표 복사됨: ${text}`)).catch(() => setStatus(text));
   }
+  // Jump to a pasted pose. Accepts the copy button's JSON ({p:[..], t:[..]}),
+  // or bare numbers: 6 = position+target, 3 = position only (keep the target).
+  const [camPoseInput, setCamPoseInput] = React.useState("");
+  function gotoCamPose() {
+    const txt = camPoseInput.trim();
+    if (!txt || !camApiRef.current) return;
+    const vec3 = (a: unknown): [number, number, number] | null =>
+      Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((v) => Number.isFinite(v))
+        ? [a[0], a[1], a[2]] : null;
+    let p: [number, number, number] | null = null;
+    let t: [number, number, number] | null = null;
+    try {
+      const o = JSON.parse(txt);
+      p = vec3(o?.p); t = vec3(o?.t);
+    } catch { /* not JSON — fall through to number parsing */ }
+    if (!p) {
+      const nums = (txt.match(/-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g) || []).map(Number);
+      if (nums.length >= 6) { p = [nums[0], nums[1], nums[2]]; t = [nums[3], nums[4], nums[5]]; }
+      else if (nums.length >= 3) p = [nums[0], nums[1], nums[2]];
+    }
+    if (!p) { setStatus('카메라 좌표 형식 오류 — {"p":[x,y,z],"t":[x,y,z]} 또는 숫자 6개(위치+타깃)/3개(위치)'); return; }
+    camApiRef.current.apply(p, t ?? camApiRef.current.get().t);
+    setStatus(`카메라 이동: (${p.map((v) => v.toFixed(2)).join(", ")})`);
+  }
 
   const [serverOk, setServerOk] = React.useState<boolean | null>(null);
   const [lastUpdate, setLastUpdate] = React.useState<string>("");
@@ -1833,6 +1857,16 @@ export default function App() {
                 <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">카메라 위치</span><span className="num" style={{ fontSize: 11 }}>{camPose.p.map((v) => v.toFixed(2)).join(", ")}</span></div>
                 <div className="row" style={{ justifyContent: "space-between" }}><span className="muted">카메라 방향</span><span className="num" style={{ fontSize: 11 }}>{camPose.d.map((v) => v.toFixed(2)).join(", ")}</span></div>
                 <button onClick={copyCamPose} title="현재 위치/타깃을 JSON으로 복사 (시작 카메라 지정용)">📋 카메라 좌표 복사</button>
+                <div className="row" style={{ gap: 6 }}>
+                  <input
+                    className="grow num" style={{ fontSize: 11, minWidth: 0 }}
+                    placeholder='{"p":[x,y,z],"t":[x,y,z]}'
+                    value={camPoseInput}
+                    onChange={(e) => setCamPoseInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") gotoCamPose(); }}
+                  />
+                  <button onClick={gotoCamPose} disabled={!camPoseInput.trim()} title="붙여넣은 좌표로 카메라 이동 (JSON 또는 숫자 6개/3개)">이동</button>
+                </div>
               </>
             )}
             <hr className="divider" />
