@@ -27,12 +27,13 @@ jobs:
       - name: Unit / round-trip tests
         run: npm test
 
-      - name: Render smoke test (occlusion / sort pipeline)
+      - name: Browser smoke tests (render pipeline + selection)
         run: |
           npm run preview -- --port 4173 --strictPort &
           SERVER_PID=$!
-          # render-smoke.mjs waits for the server itself (up to 30s).
-          SMOKE_URL=http://localhost:4173 npm run test:smoke
+          # Each smoke waits for the server itself (up to 30s).
+          SMOKE_URL=http://localhost:4173 npm run test:smoke && \
+          SMOKE_URL=http://localhost:4173 npm run test:selection
           RC=$?
           kill "$SERVER_PID" 2>/dev/null || true
           exit $RC
