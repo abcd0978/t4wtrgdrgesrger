@@ -273,6 +273,8 @@ export default function App() {
   const pendingView = React.useRef<View | null>(null);
   const pendingSel = React.useRef<number[] | null>(null);
   const didInit = React.useRef(false);
+  // Where the current scene came from — decides what a share link can carry.
+  const sourceRef = React.useRef<{ kind: "server" | "test" | "local"; file?: string } | null>(null);
   const originalBuffer = React.useRef<Uint32Array | null>(null);
   const editOrigin = React.useRef<Uint32Array | null>(null); // buffer snapshot at drag start
   const workBuf = React.useRef<Uint32Array | null>(null);     // live-edited copy during a drag
@@ -389,6 +391,7 @@ export default function App() {
       // the freshly loaded array is never mutated — a .slice() here doubled
       // load-time memory on multi-million-splat scenes.
       if (final) originalBuffer.current = final;
+      sourceRef.current = { kind: "server" };
       if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
@@ -406,14 +409,39 @@ export default function App() {
     if (u.maxFrames) setMaxFrames(u.maxFrames);
     if (u.cam) pendingView.current = u.cam;
     if (u.sel) pendingSel.current = u.sel;
+    // Shared render settings / display options override the local ones so the
+    // recipient sees the exact same picture (session-only fields stay off).
+    if (u.rs) {
+      setSettings((s) => ({
+        ...s, ...(u.rs as Partial<RenderSettings>),
+        cropOn: 0, cropMin: [0, 0, 0], cropMax: [0, 0, 0], wipeOn: 0, wipePos: 0.5, lodDistWorld: 0,
+      }));
+    }
+    if (u.sc) {
+      const sc = u.sc;
+      if (typeof sc.bg === "string") setBg(sc.bg);
+      if (sc.showMap !== undefined) setShowMap(!!sc.showMap);
+      if (sc.showGrid !== undefined) setShowGrid(!!sc.showGrid);
+      if (sc.grid) setGrid({ ...sc.grid });
+      if (sc.showAxes !== undefined) setShowAxes(!!sc.showAxes);
+      if (sc.dprAuto !== undefined) setDprAuto(!!sc.dprAuto);
+      if (typeof sc.dpr === "number" && sc.dpr > 0) setDpr(sc.dpr);
+      if (typeof sc.renderFrac === "number" && sc.renderFrac > 0 && sc.renderFrac <= 1) setRenderFrac(sc.renderFrac);
+    }
     if (u.run) {
       load({ host: u.host, runId: u.run, mode: u.mode, maxFrames: u.maxFrames });
+    } else if (u.test) {
+      // Shared CDN test scene. (loadTestScene's sync prefix clears
+      // pendingView, so the shared camera is re-set right after the call.)
+      const scene = TEST_SCENES.find((sc2) => sc2.file === u.test) ?? { name: u.test.replace(/\.splat$/i, ""), file: u.test };
+      loadTestScene(scene);
+      if (u.cam) pendingView.current = u.cam;
     } else {
       // No shared/run URL: greet with the Train demo instead of an empty
-      // "server unreachable" screen. (loadTestScene's sync prefix clears
-      // pendingView, so the pinned start view is set right after the call.)
+      // "server unreachable" screen.
       loadTestScene(TEST_SCENES[0]);
-      if (DEFAULT_TEST_VIEW) pendingView.current = { p: DEFAULT_TEST_VIEW.p, t: DEFAULT_TEST_VIEW.t };
+      if (u.cam) pendingView.current = u.cam;
+      else if (DEFAULT_TEST_VIEW) pendingView.current = { p: DEFAULT_TEST_VIEW.p, t: DEFAULT_TEST_VIEW.t };
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -940,15 +968,33 @@ export default function App() {
     ? dist3(measurePts[measurePts.length - 2], measurePts[measurePts.length - 1])
     : null;
 
+  // Share EVERYTHING needed to reproduce this exact screen: scene source
+  // (server run or CDN test scene), camera, selection, all render settings,
+  // and display options. Local-file scenes can't travel in a URL — the link
+  // still carries camera/settings, with a status note.
   function share() {
     const v = camApiRef.current?.get();
+    const src = sourceRef.current;
+    const {
+      cropOn: _a, cropMin: _b, cropMax: _c2, wipeOn: _d, wipePos: _e, lodDistWorld: _f,
+      ...rsShare
+    } = settings;
     const url = buildShareUrl({
-      host, run: runId, mode, maxFrames,
+      host: src?.kind === "server" ? host : undefined,
+      run: src?.kind === "server" ? runId : undefined,
+      mode: src?.kind === "server" ? mode : undefined,
+      maxFrames: src?.kind === "server" ? maxFrames : undefined,
+      test: src?.kind === "test" ? src.file : undefined,
       cam: v ?? undefined,
       sel: selection.size > 0 ? [...selection] : undefined,
+      rs: rsShare as unknown as Record<string, unknown>,
+      sc: { bg, showMap, showGrid, grid, showAxes, dprAuto, dpr, renderFrac },
     });
+    const note =
+      src?.kind === "local" ? " (로컬 파일 씬은 링크에 담을 수 없어 카메라·설정만 공유됨)" :
+      selection.size > 500 ? " (선택이 500개를 넘어 링크에서 제외됨)" : "";
     const c = navigator.clipboard;
-    if (c) c.writeText(url).then(() => setStatus("공유 링크 복사됨")).catch(() => setStatus(url));
+    if (c) c.writeText(url).then(() => setStatus("공유 링크 복사됨" + note)).catch(() => setStatus(url));
     else setStatus(url);
   }
 
@@ -1043,6 +1089,7 @@ export default function App() {
         : parsePly(await file.arrayBuffer());
       setBuffer(b); setSh1(sh); setBounds(computeBounds(b));
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
+      sourceRef.current = { kind: "local" };
       if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
       setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}`);
     } catch (err) {
@@ -1074,6 +1121,8 @@ export default function App() {
       setRunId(scene.name);
       setBuffer(b); setBounds(computeBounds(b));
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
+      sourceRef.current = { kind: "test", file: scene.file };
+      if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
       setStatus(`${scene.name}: ${(b.length / 8).toLocaleString()} gaussians`);
     } catch (err) {
       setStatus(`테스트 씬 오류: ${(err as Error).message} (네트워크/CORS 확인)`);
@@ -1177,6 +1226,7 @@ export default function App() {
   // Replace the whole scene with `b`: it becomes the active/editable main buffer
   // (selection, gizmos, scene-rotation all act on it). Keeps the camera.
   function becomeScene(name: string, b: Uint32Array) {
+    sourceRef.current = { kind: "local" };
     setRunId(name);
     setBuffer(b); setSh1(null); setBounds(computeBounds(b));
     originalBuffer.current = b; // shared, not copied — edits are copy-on-write
