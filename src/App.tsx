@@ -22,7 +22,7 @@ import { FloatingPanel } from "./components/FloatingPanel";
 import { readUrlState, buildShareUrl } from "./lib/urlState";
 
 type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
-type View = { p: [number, number, number]; t: [number, number, number] };
+type View = { p: [number, number, number]; t: [number, number, number]; thumb?: string };
 type Group = { id: number; name: string; indices: number[]; hidden: boolean; color: string };
 type CompareItem = { id: number; name: string; buffer: Uint32Array; visible: boolean };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -1485,9 +1485,28 @@ export default function App() {
   }
 
   // Camera bookmarks: save / restore / delete the current view (persisted).
-  function saveBookmark() {
+  async function saveBookmark() {
     const v = camApiRef.current?.get();
-    if (v) { setBookmarks((b) => [...b, v]); setStatus("북마크 저장됨"); }
+    if (!v) return;
+    let thumb: string | undefined;
+    try {
+      const blob = await captureBlobRef.current?.();
+      if (blob) {
+        const bmp = await createImageBitmap(blob);
+        const W = 120, H = 68;
+        const c = document.createElement("canvas");
+        c.width = W; c.height = H;
+        const ctx = c.getContext("2d")!;
+        // cover-crop so the thumb isn't squished
+        const s2 = Math.max(W / bmp.width, H / bmp.height);
+        const sw = W / s2, sh = H / s2;
+        ctx.drawImage(bmp, (bmp.width - sw) / 2, (bmp.height - sh) / 2, sw, sh, 0, 0, W, H);
+        bmp.close();
+        thumb = c.toDataURL("image/jpeg", 0.6);
+      }
+    } catch { /* thumbnail is optional */ }
+    setBookmarks((b) => [...b, { ...v, thumb }]);
+    setStatus("북마크 저장됨");
   }
   function restoreBookmark(i: number) {
     const v = bookmarks[i];
@@ -1974,9 +1993,12 @@ export default function App() {
               {bookmarks.length >= 2 && <button className={touring ? "active icon" : "icon"} onClick={() => (touring ? setTouring(false) : bookmarkTour())} title="북마크를 부드럽게 순회">{touring ? "⏸ 순회" : "▶ 순회"}</button>}
             </div>
             <button onClick={saveBookmark}>＋ 현재 시점 저장</button>
-            {bookmarks.map((_, i) => (
+            {bookmarks.map((bm, i) => (
               <div key={i} className="row" style={{ gap: 5 }}>
-                <button className="grow" style={{ textAlign: "left" }} onClick={() => restoreBookmark(i)} title="이 시점으로 이동">📌 북마크 {i + 1}</button>
+                <button className="grow" style={{ textAlign: "left", display: "flex", alignItems: "center", gap: 8, padding: 4 }} onClick={() => restoreBookmark(i)} title="이 시점으로 이동">
+                  {bm.thumb ? <img src={bm.thumb} alt="" style={{ width: 56, height: 32, objectFit: "cover", borderRadius: 4, flex: "none" }} /> : <span>📌</span>}
+                  <span>북마크 {i + 1}</span>
+                </button>
                 <button className="ghost icon" onClick={() => moveBookmark(i, -1)} disabled={i === 0} title="위로">▲</button>
                 <button className="ghost icon" onClick={() => moveBookmark(i, 1)} disabled={i === bookmarks.length - 1} title="아래로">▼</button>
                 <button className="ghost icon" onClick={() => deleteBookmark(i)} title="삭제">✕</button>
