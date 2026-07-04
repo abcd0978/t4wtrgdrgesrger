@@ -11,10 +11,11 @@ import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScale
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import {
   buildDisplayBuffer, subsampleForLod, subsampleShForLod, rotateSceneBuffer, cropOutside,
-  keepOnly, duplicateSelection as dupSelectionOp, detectFloaters, deleteIndices,
+  keepOnly, duplicateSelection as dupSelectionOp, deleteIndices,
   invertSelection as invertSelOp, growSelection as growSelOp, colorFilterSelection,
-  opacityFilterSelection, selectByPosition, frameArray, computeSceneStats, diffHeatmapColors,
+  opacityFilterSelection, selectByPosition, frameArray, computeSceneStats,
 } from "./lib/gaussianOps";
+import { computeFloaters, computeHeatmap } from "./lib/compute";
 import { TEST_SCENE_CDN, TEST_SCENES, DEFAULT_TEST_VIEW, type Recent } from "./lib/scenes";
 import { lsGet, lsSet, lsNum, lsBool, lsJson } from "./lib/storage";
 import { parseCamPose, formatCamPose } from "./lib/camPose";
@@ -242,6 +243,10 @@ export default function App() {
   const editCenter = React.useRef<[number, number, number]>([0, 0, 0]);
   const editMoved = React.useRef(false);
   const bufferRef = React.useRef<Uint32Array | null>(null);
+  // Latest raw (unedited-overlay) buffer — lets async worker ops detect that the
+  // scene changed mid-scan and abandon a stale write.
+  const rawBufferRef = React.useRef<Uint32Array | null>(null);
+  rawBufferRef.current = buffer;
   const selectionRef = React.useRef<Set<number>>(selection);
   selectionRef.current = selection;
 
@@ -626,15 +631,17 @@ export default function App() {
   }
 
   // Remove "floaters": gaussians with (almost) no neighbours, via a coarse
-  // spatial hash grid (see detectFloaters). Fast path: a point in an already-
-  // dense cell is kept immediately; only sparse-cell points pay for the 27-cell
-  // neighbourhood sum.
-  function cleanFloaters() {
+  // spatial hash grid (see detectFloaters). The scan runs in a worker for big
+  // scenes so the UI doesn't freeze (identical result, sync fallback).
+  async function cleanFloaters() {
     if (!buffer || !bounds) return;
-    const del = detectFloaters(buffer, bounds);
+    const src = buffer;
+    setStatus("🧹 플로터 검사 중…");
+    const del = await computeFloaters(src, bounds);
+    if (rawBufferRef.current !== src) return; // scene changed mid-scan — abandon
     if (del.length === 0) { setStatus("플로터 없음 (기준: 주변 이웃 ≤ 5)"); return; }
-    pushUndo(buffer);
-    setBuffer(deleteIndices(buffer, del));
+    pushUndo(src);
+    setBuffer(deleteIndices(src, del));
     setStatus(`🧹 플로터 ${del.length.toLocaleString()}개 삭제 (undo 가능)`);
   }
 
@@ -999,15 +1006,17 @@ export default function App() {
   // Difference heatmap: recolour the MAIN scene by distance to the nearest
   // gaussian in the overlay (spatial hash, capped at 5% of the scene radius).
   // Blue = unchanged, red = no counterpart nearby. Undoable (colour edit).
-  function diffHeatmap(item: CompareItem) {
+  async function diffHeatmap(item: CompareItem) {
     if (!buffer || !bounds) return;
+    const src = buffer;
     setStatus(`Δ 히트맵 계산 중… (${item.name})`);
-    window.setTimeout(() => {
-      if (!buffer || !bounds) return;
-      pushUndo(buffer);
-      setBuffer(diffHeatmapColors(buffer, item.buffer, bounds));
-      setStatus(`Δ 히트맵: 파랑=일치 · 빨강=차이 (기준 ${item.name}, undo로 복원)`);
-    }, 30);
+    // Runs in a worker for big scenes (identical result, sync fallback), so the
+    // nearest-neighbour scan doesn't freeze the UI.
+    const nb = await computeHeatmap(src, item.buffer, bounds);
+    if (rawBufferRef.current !== src) return; // scene changed mid-scan — abandon
+    pushUndo(src);
+    setBuffer(nb);
+    setStatus(`Δ 히트맵: 파랑=일치 · 빨강=차이 (기준 ${item.name}, undo로 복원)`);
   }
 
   function toggleCompare(id: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, visible: !c.visible } : c)); }
