@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsx tests/cov-roundtrip.mts && tsx tests/ply-roundtrip.mts && tsx tests/npz-roundtrip.mts && tsx tests/splat-roundtrip.mts && tsx tests/spz-roundtrip.mts"
+    "test": "tsx tests/cov-roundtrip.mts && tsx tests/ply-roundtrip.mts && tsx tests/npz-roundtrip.mts && tsx tests/splat-roundtrip.mts && tsx tests/spz-roundtrip.mts && tsx tests/gaussianOps-roundtrip.mts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.3",

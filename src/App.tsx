@@ -9,6 +9,16 @@ import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
+import {
+  buildDisplayBuffer, subsampleForLod, subsampleShForLod, rotateSceneBuffer, cropOutside,
+  keepOnly, duplicateSelection as dupSelectionOp, detectFloaters, deleteIndices,
+  invertSelection as invertSelOp, growSelection as growSelOp, colorFilterSelection,
+  opacityFilterSelection, selectByPosition, frameArray, computeSceneStats, diffHeatmapColors,
+} from "./lib/gaussianOps";
+import { TEST_SCENE_CDN, TEST_SCENES, DEFAULT_TEST_VIEW, type Recent } from "./lib/scenes";
+import { lsGet, lsSet, lsNum, lsBool, lsJson } from "./lib/storage";
+import { parseCamPose, formatCamPose } from "./lib/camPose";
+import { Hist, HELP } from "./components/Hist";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, NotesView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -28,67 +38,6 @@ type Group = { id: number; name: string; indices: number[]; hidden: boolean; col
 type CompareItem = { id: number; name: string; buffer: Uint32Array; visible: boolean };
 const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const FPS_MIN = 0.5, FPS_MAX = 60;
-
-// Public demo .splat scenes (the ones the antimatter15/splat demo streams),
-// hosted on Hugging Face with CORS enabled — handy for testing without a server.
-const TEST_SCENE_CDN = "https://huggingface.co/cakewalk/splat-data/resolve/main/";
-const TEST_SCENES: { name: string; file: string; big?: boolean }[] = [
-  { name: "Train", file: "train.splat" },
-  { name: "Truck", file: "truck.splat" },
-  { name: "Plush", file: "plush.splat" },
-  { name: "Bicycle", file: "bicycle.splat", big: true },
-  { name: "Garden", file: "garden.splat", big: true },
-  { name: "Stump", file: "stump.splat", big: true },
-  { name: "Treehill", file: "treehill.splat", big: true },
-];
-
-// First-visit scene: Train auto-loads when the URL doesn't specify a run.
-// Pinned starting camera (copied from 통계 > 카메라 좌표 복사).
-const DEFAULT_TEST_VIEW: { p: [number, number, number]; t: [number, number, number] } | null = {
-  p: [-3.46, -3.853, 0.712],
-  t: [-1.434, 0.499, -0.625],
-};
-
-// Persist the load inputs (server url / run / mode / frames) across visits.
-const LS = "vwd:";
-const lsGet = (k: string, d: string) => { try { return localStorage.getItem(LS + k) ?? d; } catch { return d; } };
-
-// Tiny inline bar histogram for the stats panel.
-function Hist({ data, label, sub }: { data: number[]; label: string; sub?: string }) {
-  const max = Math.max(...data, 1);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="muted" style={{ fontSize: 11 }}>{label}</span>
-        {sub && <span className="num muted" style={{ fontSize: 10 }}>{sub}</span>}
-      </div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 34 }}>
-        {data.map((v, i) => (
-          <div key={i} style={{ flex: 1, height: `${(v / max) * 100}%`, minHeight: v > 0 ? 2 : 0, background: "var(--accent)", opacity: 0.8, borderRadius: 1 }} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const HELP = [
-  ["드래그", "카메라 회전"],
-  ["스크롤", "확대 / 축소"],
-  ["WASD / 방향키", "카메라 이동 (Shift: 빠르게, Q·E: 아래·위)"],
-  ["더블클릭", "맨 앞 가우시안 선택 (Shift: 누적)"],
-  ["◆ 다면체 선택", "도구 ▾ → 가우시안 4점 이상으로 입체 도형을 만들어 그 안을 선택"],
-  ["길게 누르기 (0.5초)", "그 지점을 회전축(피벗)으로"],
-  ["주황 구 드래그", "선택 이동 (실시간)"],
-  ["초록 링 드래그", "선택 회전 (실시간, 시점축 기준)"],
-  ["왼쪽 패널", "이동·회전·스케일·색·복제·숨기기·격리·삭제"],
-  ["측정 버튼", "두 점 더블클릭 → 실측 거리"],
-  ["타임라인 (delta)", "▶ 재생 · 속도 · 구간 지정 → 구간 .ply"],
-  ["PLY 열기 / 내보내기 / 공유", "로컬 .ply 로드 · .ply 저장 · 링크"],
-  ["스크린샷", "현재 화면 PNG 저장"],
-  ["undo / redo / reset", "Ctrl+Z / Ctrl+Shift+Z / 처음으로"],
-  ["Delete / Esc", "선택 삭제 / 선택 해제"],
-  ["⚙ 버튼", "렌더 설정 열기"],
-];
 
 export default function App() {
   const [host, setHost] = React.useState(() => lsGet("host", ""));
@@ -116,22 +65,18 @@ export default function App() {
   // and correctly highlighted). Session-only fields — clipping, crop box,
   // wipe, derived values — reset to defaults on restore.
   const [settings, setSettings] = React.useState<RenderSettings>(() => {
-    try {
-      const saved = JSON.parse(lsGet("renderSettings", "null"));
-      if (saved && typeof saved === "object") {
-        return {
-          ...DEFAULT_SETTINGS, ...saved,
-          clipAxis: -1, clipPos: 0, clipSign: 1,
-          cropOn: 0, cropMin: [0, 0, 0], cropMax: [0, 0, 0],
-          wipeOn: 0, wipePos: 0.5, lodDistWorld: 0,
-        };
-      }
-    } catch { /* corrupt storage -> defaults */ }
+    const saved = lsJson<Partial<RenderSettings> | null>("renderSettings", null);
+    if (saved && typeof saved === "object") {
+      return {
+        ...DEFAULT_SETTINGS, ...saved,
+        clipAxis: -1, clipPos: 0, clipSign: 1,
+        cropOn: 0, cropMin: [0, 0, 0], cropMax: [0, 0, 0],
+        wipeOn: 0, wipePos: 0.5, lodDistWorld: 0,
+      };
+    }
     return DEFAULT_SETTINGS;
   });
-  React.useEffect(() => {
-    try { localStorage.setItem(LS + "renderSettings", JSON.stringify(settings)); } catch { /* ignore */ }
-  }, [settings]);
+  React.useEffect(() => { lsSet("renderSettings", JSON.stringify(settings)); }, [settings]);
   const [showPanel, setShowPanel] = React.useState(false);
   const [showHelp, setShowHelp] = React.useState(() => typeof window === "undefined" || window.innerWidth > 700);
   const [menuOpen, setMenuOpen] = React.useState(false); // mobile toolbar hamburger
@@ -156,9 +101,7 @@ export default function App() {
   const [filterAdd, setFilterAdd] = React.useState(false);
   const [filterOpMin, setFilterOpMin] = React.useState(1);
   const [filterOpMax, setFilterOpMax] = React.useState(255);
-  const [bookmarks, setBookmarks] = React.useState<View[]>(() => {
-    try { return JSON.parse(lsGet("bookmarks", "[]")); } catch { return []; }
-  });
+  const [bookmarks, setBookmarks] = React.useState<View[]>(() => lsJson<View[]>("bookmarks", []));
   // Black bg + no grid by default (antimatter15's look): gaussian surfaces are
   // never fully opaque, so a white bg and grid lines bleed through the model
   // and read as a translucent/x-ray effect. Both stay toggleable in settings.
@@ -172,39 +115,22 @@ export default function App() {
   // can't keep up (and back up when there's headroom). Uncheck 자동 in
   // settings to pin a value manually.
   const nativeDpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2);
-  const [dprAuto, setDprAuto] = React.useState(() => lsGet("dprAuto", "1") === "1");
+  const [dprAuto, setDprAuto] = React.useState(() => lsBool("dprAuto", true));
   const [autoDprValue, setAutoDprValue] = React.useState(nativeDpr);
-  const [dpr, setDpr] = React.useState(() => {
-    const v = parseFloat(lsGet("dprManual", "1.5"));
-    return Number.isFinite(v) && v > 0 ? v : 1.5; // manual value when auto is off
-  });
+  // Manual DPR value used when auto is off.
+  const [dpr, setDpr] = React.useState(() => lsNum("dprManual", 1.5, Number.MIN_VALUE));
   const [antialias, setAntialias] = React.useState(false);
   // Control sensitivities (persisted). Two knobs only: rotate and zoom, both
   // applying to mouse AND touch — the touch-specific attenuation is a fixed
   // internal factor inside ConstantControlSpeed.
-  const [rotateSens, setRotateSens] = React.useState(() => {
-    const v = parseFloat(lsGet("rotateSens", "1"));
-    return Number.isFinite(v) && v > 0 ? v : 1;
-  });
-  const [zoomSens, setZoomSens] = React.useState(() => {
-    const v = parseFloat(lsGet("zoomSens", "1"));
-    return Number.isFinite(v) && v > 0 ? v : 1;
-  });
+  const [rotateSens, setRotateSens] = React.useState(() => lsNum("rotateSens", 1, Number.MIN_VALUE));
+  const [zoomSens, setZoomSens] = React.useState(() => lsNum("zoomSens", 1, Number.MIN_VALUE));
   // Translation sensitivity: right-drag / two-finger pan AND WASD fly.
-  const [moveSens, setMoveSens] = React.useState(() => {
-    const v = parseFloat(lsGet("moveSens", "1"));
-    return Number.isFinite(v) && v > 0 ? v : 1;
-  });
+  const [moveSens, setMoveSens] = React.useState(() => lsNum("moveSens", 1, Number.MIN_VALUE));
   // Adaptive-DPR floor: resolution is shed only when fps falls below this.
-  const [minFps, setMinFps] = React.useState(() => {
-    const v = parseFloat(lsGet("minFps", "15"));
-    return Number.isFinite(v) && v >= 5 ? v : 15;
-  });
+  const [minFps, setMinFps] = React.useState(() => lsNum("minFps", 15, 5));
   // Undo/redo snapshot memory budget (MB).
-  const [undoCapMB, setUndoCapMB] = React.useState(() => {
-    const v = parseInt(lsGet("undoCapMB", "384"));
-    return Number.isFinite(v) && v >= 64 ? v : 384;
-  });
+  const [undoCapMB, setUndoCapMB] = React.useState(() => Math.round(lsNum("undoCapMB", 384, 64)));
   // Load-time subsampling for test/local scenes: keep every Nth gaussian
   // (1 = all). Unlike LOD 비율 this cuts real memory, not just draw cost.
   const [loadDiv, setLoadDiv] = React.useState(() => {
@@ -213,29 +139,24 @@ export default function App() {
   });
   // Recently opened scenes (server runs + CDN test scenes; local files can't
   // be reopened without a file handle, so they're not recorded).
-  type Recent = { k: "test"; f: string; label: string } | { k: "run"; host: string; run: string; mode: "snapshot" | "delta"; maxFrames: string; label: string };
-  const [recents, setRecents] = React.useState<Recent[]>(() => {
-    try { return JSON.parse(lsGet("recents", "[]")); } catch { return []; }
-  });
+  const [recents, setRecents] = React.useState<Recent[]>(() => lsJson<Recent[]>("recents", []));
   const recordRecent = React.useCallback((r: Recent) => {
     setRecents((prev) => {
       const keyOf = (x: Recent) => (x.k === "test" ? `t:${x.f}` : `r:${x.host}|${x.run}|${x.mode}`);
       const next = [r, ...prev.filter((x) => keyOf(x) !== keyOf(r))].slice(0, 6);
-      try { localStorage.setItem(LS + "recents", JSON.stringify(next)); } catch { /* ignore */ }
+      lsSet("recents", JSON.stringify(next));
       return next;
     });
   }, []);
   React.useEffect(() => {
-    try {
-      localStorage.setItem(LS + "rotateSens", String(rotateSens));
-      localStorage.setItem(LS + "zoomSens", String(zoomSens));
-      localStorage.setItem(LS + "moveSens", String(moveSens));
-      localStorage.setItem(LS + "minFps", String(minFps));
-      localStorage.setItem(LS + "undoCapMB", String(undoCapMB));
-      localStorage.setItem(LS + "dprAuto", dprAuto ? "1" : "0");
-      localStorage.setItem(LS + "dprManual", String(dpr));
-      localStorage.setItem(LS + "loadDiv", String(loadDiv));
-    } catch { /* ignore */ }
+    lsSet("rotateSens", String(rotateSens));
+    lsSet("zoomSens", String(zoomSens));
+    lsSet("moveSens", String(moveSens));
+    lsSet("minFps", String(minFps));
+    lsSet("undoCapMB", String(undoCapMB));
+    lsSet("dprAuto", dprAuto ? "1" : "0");
+    lsSet("dprManual", String(dpr));
+    lsSet("loadDiv", String(loadDiv));
   }, [rotateSens, zoomSens, moveSens, minFps, undoCapMB, dprAuto, dpr, loadDiv]);
   const [showAxes, setShowAxes] = React.useState(false);
 
@@ -285,13 +206,9 @@ export default function App() {
   const [videoRec, setVideoRec] = React.useState(false);
   const turntableTimer = React.useRef<number | null>(null);
   const [clipSweep, setClipSweep] = React.useState(false);
-  const [renderFrac, setRenderFrac] = React.useState(() => {
-    const v = parseFloat(lsGet("renderFrac", "1"));
-    return Number.isFinite(v) && v > 0 && v <= 1 ? v : 1; // LOD: fraction of gaussians to draw
-  });
-  React.useEffect(() => {
-    try { localStorage.setItem(LS + "renderFrac", String(renderFrac)); } catch { /* ignore */ }
-  }, [renderFrac]);
+  // LOD: fraction of gaussians to draw.
+  const [renderFrac, setRenderFrac] = React.useState(() => lsNum("renderFrac", 1, Number.MIN_VALUE, 1));
+  React.useEffect(() => { lsSet("renderFrac", String(renderFrac)); }, [renderFrac]);
   const captureRef = React.useRef<((name: string) => void) | null>(null);
   const captureBlobRef = React.useRef<(() => Promise<Blob | null>) | null>(null);
   const fpsElRef = React.useRef<HTMLSpanElement | null>(null);
@@ -327,31 +244,17 @@ export default function App() {
   }, [showStats]);
   function copyCamPose() {
     if (!camPose) return;
-    const r3 = (a: number[]) => a.map((v) => Math.round(v * 1000) / 1000);
-    const text = JSON.stringify({ p: r3(camPose.p), t: r3(camPose.t) });
+    const text = formatCamPose(camPose.p, camPose.t);
     navigator.clipboard?.writeText(text).then(() => setStatus(`카메라 좌표 복사됨: ${text}`)).catch(() => setStatus(text));
   }
   // Jump to a pasted pose. Accepts the copy button's JSON ({p:[..], t:[..]}),
   // or bare numbers: 6 = position+target, 3 = position only (keep the target).
   const [camPoseInput, setCamPoseInput] = React.useState("");
   function gotoCamPose() {
-    const txt = camPoseInput.trim();
-    if (!txt || !camApiRef.current) return;
-    const vec3 = (a: unknown): [number, number, number] | null =>
-      Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((v) => Number.isFinite(v))
-        ? [a[0], a[1], a[2]] : null;
-    let p: [number, number, number] | null = null;
-    let t: [number, number, number] | null = null;
-    try {
-      const o = JSON.parse(txt);
-      p = vec3(o?.p); t = vec3(o?.t);
-    } catch { /* not JSON — fall through to number parsing */ }
-    if (!p) {
-      const nums = (txt.match(/-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g) || []).map(Number);
-      if (nums.length >= 6) { p = [nums[0], nums[1], nums[2]]; t = [nums[3], nums[4], nums[5]]; }
-      else if (nums.length >= 3) p = [nums[0], nums[1], nums[2]];
-    }
-    if (!p) { setStatus('카메라 좌표 형식 오류 — {"p":[x,y,z],"t":[x,y,z]} 또는 숫자 6개(위치+타깃)/3개(위치)'); return; }
+    if (!camApiRef.current) return;
+    const parsed = parseCamPose(camPoseInput);
+    if (!parsed) { setStatus('카메라 좌표 형식 오류 — {"p":[x,y,z],"t":[x,y,z]} 또는 숫자 6개(위치+타깃)/3개(위치)'); return; }
+    const { p, t } = parsed;
     camApiRef.current.apply(p, t ?? camApiRef.current.get().t);
     setStatus(`카메라 이동: (${p.map((v) => v.toFixed(2)).join(", ")})`);
   }
@@ -364,17 +267,13 @@ export default function App() {
 
   // Remember the load inputs so a return visit doesn't need re-typing.
   React.useEffect(() => {
-    try {
-      localStorage.setItem(LS + "host", host);
-      localStorage.setItem(LS + "runId", runId);
-      localStorage.setItem(LS + "mode", mode);
-      localStorage.setItem(LS + "maxFrames", maxFrames);
-    } catch { /* storage unavailable (private mode) */ }
+    lsSet("host", host);
+    lsSet("runId", runId);
+    lsSet("mode", mode);
+    lsSet("maxFrames", maxFrames);
   }, [host, runId, mode, maxFrames]);
 
-  React.useEffect(() => {
-    try { localStorage.setItem(LS + "bookmarks", JSON.stringify(bookmarks)); } catch { /* ignore */ }
-  }, [bookmarks]);
+  React.useEffect(() => { lsSet("bookmarks", JSON.stringify(bookmarks)); }, [bookmarks]);
 
   async function load(over?: Partial<{ host: string; runId: string; mode: "snapshot" | "delta"; maxFrames: string }>) {
     const _host = over?.host ?? host, _run = over?.runId ?? runId;
@@ -525,33 +424,12 @@ export default function App() {
     return s;
   }, [groups]);
 
-  const displayBuffer = React.useMemo(() => {
-    if (!buffer) return null;
-    // At the last frame, show the whole (possibly edited) buffer; only truncate
-    // when scrubbed back. Keeps edits/duplicates visible in delta mode.
-    const scrubbing = frameCum != null && frameIdx < frameCum.length - 1;
-    const frontier = scrubbing ? frameCum![frameIdx] : Infinity;
-    const gHide = groupHiddenSet.size > 0;
-    if (selection.size === 0 && vis.mode === "all" && !scrubbing && !gHide) return buffer;
-    const hb = buffer.slice();
-    const dv = new DataView(hb.buffer);
-    const slots = hb.length / 8;
-    if (scrubbing || vis.mode !== "all" || gHide) {
-      for (let i = 0; i < slots; i++) {
-        let hide = i >= frontier;
-        if (vis.mode === "hide") hide = hide || vis.set.has(i);
-        else if (vis.mode === "isolate") hide = hide || !vis.set.has(i);
-        if (gHide && groupHiddenSet.has(i)) hide = true;
-        if (hide) dv.setUint8(i * 32 + 31, 0);
-      }
-    }
-    for (const i of selection) {
-      if (i < frontier && dv.getUint8(i * 32 + 31) !== 0) {
-        dv.setUint8(i * 32 + 28, 255); dv.setUint8(i * 32 + 29, 90); dv.setUint8(i * 32 + 30, 0);
-      }
-    }
-    return hb;
-  }, [buffer, selection, vis, frameCum, frameIdx, groupHiddenSet]);
+  // At the last frame, show the whole (possibly edited) buffer; only truncate
+  // when scrubbed back. Keeps edits/duplicates visible in delta mode.
+  const displayBuffer = React.useMemo(
+    () => (buffer ? buildDisplayBuffer(buffer, selection, vis, frameCum, frameIdx, groupHiddenSet) : null),
+    [buffer, selection, vis, frameCum, frameIdx, groupHiddenSet],
+  );
 
   bufferRef.current = displayBuffer; // pick against what's actually visible
 
@@ -656,17 +534,9 @@ export default function App() {
   function keepOnlySelection() {
     if (!buffer || selection.size === 0) return;
     pushUndo(buffer);
-    const nb = buffer.slice();
-    const dv = new DataView(nb.buffer);
-    const slots = nb.length / 8;
-    let n = 0;
-    for (let i = 0; i < slots; i++) {
-      if (selection.has(i)) continue;
-      const b = i * 32;
-      if (dv.getUint8(b + 31) !== 0) { dv.setUint8(b + 31, 0); n++; }
-    }
+    const { buffer: nb, deleted } = keepOnly(buffer, selection);
     setBuffer(nb);
-    setStatus(`선택만 남김: ${n.toLocaleString()}개 삭제 (undo 가능)`);
+    setStatus(`선택만 남김: ${deleted.toLocaleString()}개 삭제 (undo 가능)`);
   }
 
   function applyColorOpacity() {
@@ -700,22 +570,9 @@ export default function App() {
   // Selection-independent; transforms every gaussian's position + covariance.
   function rotateScene(axis: 0 | 1 | 2, deg: number) {
     if (!buffer || !bounds) return;
-    const c = center(bounds);
     const R = rotationAboutAxis(axis, (deg * Math.PI) / 180);
     pushUndo(buffer);
-    const nb = buffer.slice();
-    const dv = new DataView(nb.buffer);
-    const slots = nb.length / 8;
-    const cov = [0, 0, 0, 0, 0, 0];
-    for (let i = 0; i < slots; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue; // skip empty/deleted slots
-      const px = dv.getFloat32(b, true) - c[0], py = dv.getFloat32(b + 4, true) - c[1], pz = dv.getFloat32(b + 8, true) - c[2];
-      dv.setFloat32(b, c[0] + R[0] * px + R[1] * py + R[2] * pz, true);
-      dv.setFloat32(b + 4, c[1] + R[3] * px + R[4] * py + R[5] * pz, true);
-      dv.setFloat32(b + 8, c[2] + R[6] * px + R[7] * py + R[8] * pz, true);
-      readCov6(dv, b, cov); writeCov6(dv, b, rotateCovariance(cov, R));
-    }
+    const nb = rotateSceneBuffer(buffer, center(bounds), R);
     setBuffer(nb); setBounds(computeBounds(nb));
     setStatus(`scene rotated ${deg}° (${axis === 0 ? "X" : axis === 1 ? "Y" : "Z"})`);
   }
@@ -745,71 +602,23 @@ export default function App() {
   // the other edit tools, so it exports/undoes consistently).
   function cropDeleteOutside() {
     if (!buffer) return;
-    const mn = settings.cropMin, mx = settings.cropMax;
     pushUndo(buffer);
-    const nb = buffer.slice();
-    const ndv = new DataView(nb.buffer);
-    const slots = nb.length / 8;
-    let n = 0;
-    for (let i = 0; i < slots; i++) {
-      const b = i * 32;
-      if (ndv.getUint8(b + 31) === 0) continue;
-      const x = ndv.getFloat32(b, true), y = ndv.getFloat32(b + 4, true), z = ndv.getFloat32(b + 8, true);
-      if (x < mn[0] || x > mx[0] || y < mn[1] || y > mx[1] || z < mn[2] || z > mx[2]) {
-        ndv.setUint8(b + 31, 0);
-        n++;
-      }
-    }
+    const { buffer: nb, deleted } = cropOutside(buffer, settings.cropMin, settings.cropMax);
     setBuffer(nb);
     closeCrop();
-    setStatus(`크롭: 박스 밖 ${n.toLocaleString()}개 삭제 (undo 가능)`);
+    setStatus(`크롭: 박스 밖 ${deleted.toLocaleString()}개 삭제 (undo 가능)`);
   }
 
   // Remove "floaters": gaussians with (almost) no neighbours, via a coarse
-  // spatial hash grid. Fast path: a point in an already-dense cell is kept
-  // immediately; only sparse-cell points pay for the 27-cell neighbourhood sum.
+  // spatial hash grid (see detectFloaters). Fast path: a point in an already-
+  // dense cell is kept immediately; only sparse-cell points pay for the 27-cell
+  // neighbourhood sum.
   function cleanFloaters() {
     if (!buffer || !bounds) return;
-    const dv = viewOf(buffer);
-    const slots = buffer.length / 8;
-    const cell = Math.max(radius(bounds) / 50, 1e-9);
-    const key = (ix: number, iy: number, iz: number) =>
-      ((ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791)) >>> 0;
-    const counts = new Map<number, number>();
-    for (let i = 0; i < slots; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      const k = key(
-        Math.floor(dv.getFloat32(b, true) / cell),
-        Math.floor(dv.getFloat32(b + 4, true) / cell),
-        Math.floor(dv.getFloat32(b + 8, true) / cell),
-      );
-      counts.set(k, (counts.get(k) ?? 0) + 1);
-    }
-    const MIN_N = 5; // neighbours (incl. self) below this = floater
-    const del: number[] = [];
-    for (let i = 0; i < slots; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      const ix = Math.floor(dv.getFloat32(b, true) / cell);
-      const iy = Math.floor(dv.getFloat32(b + 4, true) / cell);
-      const iz = Math.floor(dv.getFloat32(b + 8, true) / cell);
-      if ((counts.get(key(ix, iy, iz)) ?? 0) > MIN_N) continue;
-      let nb = 0;
-      outer: for (let dx = -1; dx <= 1; dx++)
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dz = -1; dz <= 1; dz++) {
-            nb += counts.get(key(ix + dx, iy + dy, iz + dz)) ?? 0;
-            if (nb > MIN_N) break outer;
-          }
-      if (nb <= MIN_N) del.push(i);
-    }
+    const del = detectFloaters(buffer, bounds);
     if (del.length === 0) { setStatus("플로터 없음 (기준: 주변 이웃 ≤ 5)"); return; }
     pushUndo(buffer);
-    const nb2 = buffer.slice();
-    const ndv = new DataView(nb2.buffer);
-    for (const i of del) ndv.setUint8(i * 32 + 31, 0);
-    setBuffer(nb2);
+    setBuffer(deleteIndices(buffer, del));
     setStatus(`🧹 플로터 ${del.length.toLocaleString()}개 삭제 (undo 가능)`);
   }
 
@@ -830,22 +639,10 @@ export default function App() {
   // Copy the selection (offset along X) into appended slots; select the copies.
   function duplicateSelection() {
     if (!buffer || selection.size === 0 || !bounds) return;
-    const sel = [...selection];
-    const nb = new Uint32Array(buffer.length + sel.length * 8);
-    nb.set(buffer);
-    const dv = new DataView(nb.buffer);
-    const off = radius(bounds) * 0.05;
-    const newSel = new Set<number>();
-    let w = buffer.length;
-    for (const i of sel) {
-      nb.copyWithin(w, i * 8, i * 8 + 8);
-      dv.setFloat32(w * 4, dv.getFloat32(w * 4, true) + off, true);
-      newSel.add(w / 8);
-      w += 8;
-    }
+    const { buffer: nb, newSel } = dupSelectionOp(buffer, selection, radius(bounds) * 0.05);
     pushUndo(buffer);
     setBuffer(nb); setBounds(computeBounds(nb)); setSelection(newSel);
-    setStatus(`duplicated ${sel.length} gaussians`);
+    setStatus(`duplicated ${selection.size} gaussians`);
   }
 
   // Hide/isolate are non-destructive (display-only alpha 0); not on the undo stack.
@@ -874,7 +671,8 @@ export default function App() {
     setNotes((ns) => [...ns, { id, p, text: text.trim().slice(0, 200) }]);
     setStatus(`📌 주석 추가됨 (${notes.length + 1}개)`);
   }
-  // Select every gaussian inside the convex hull of `pts` (4+ vertices).
+  // Select every gaussian inside the convex hull of `pts` (4+ vertices). The
+  // hull is anchored to world positions, so it holds as the camera moves.
   function hullSelect(pts: [number, number, number][], additive: boolean): boolean {
     if (!buffer || pts.length < 4) return false;
     let hull: ConvexHull;
@@ -884,16 +682,8 @@ export default function App() {
       setStatus("다면체를 만들 수 없음 — 점들이 한 평면/직선 위에 있어요");
       return false;
     }
-    const dv = viewOf(buffer);
-    const slots = buffer.length / 8;
     const v = new Vector3();
-    const out = additive ? new Set(selection) : new Set<number>();
-    for (let i = 0; i < slots; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      v.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
-      if (hull.containsPoint(v)) out.add(i);
-    }
+    const out = selectByPosition(buffer, (x, y, z) => hull.containsPoint(v.set(x, y, z)), additive ? selection : new Set());
     setSelection(out);
     setStatus(`◆ 다면체 선택: ${out.size.toLocaleString()}개`);
     return true;
@@ -911,10 +701,7 @@ export default function App() {
   // Invert: select every visible gaussian that isn't currently selected.
   function invertSelection() {
     if (!buffer) return;
-    const dv = viewOf(buffer);
-    const n = buffer.length / 8;
-    const next = new Set<number>();
-    for (let i = 0; i < n; i++) if (dv.getUint8(i * 32 + 31) !== 0 && !selection.has(i)) next.add(i);
+    const next = invertSelOp(buffer, selection);
     setSelection(next);
     setStatus(`inverted → ${next.size} selected`);
   }
@@ -923,23 +710,7 @@ export default function App() {
   // the current selection — a cheap way to fill out the region you picked.
   function growSelection() {
     if (!buffer || selection.size === 0) return;
-    const dv = viewOf(buffer);
-    let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
-    for (const i of selection) {
-      const b = i * 32, x = dv.getFloat32(b, true), y = dv.getFloat32(b + 4, true), z = dv.getFloat32(b + 8, true);
-      if (x < mnx) mnx = x; if (y < mny) mny = y; if (z < mnz) mnz = z;
-      if (x > mxx) mxx = x; if (y > mxy) mxy = y; if (z > mxz) mxz = z;
-    }
-    const pad = 0.05 * Math.max(mxx - mnx, mxy - mny, mxz - mnz, 1e-6);
-    mnx -= pad; mny -= pad; mnz -= pad; mxx += pad; mxy += pad; mxz += pad;
-    const n = buffer.length / 8;
-    const next = new Set(selection);
-    for (let i = 0; i < n; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      const x = dv.getFloat32(b, true), y = dv.getFloat32(b + 4, true), z = dv.getFloat32(b + 8, true);
-      if (x >= mnx && x <= mxx && y >= mny && y <= mxy && z >= mnz && z <= mxz) next.add(i);
-    }
+    const next = growSelOp(buffer, selection);
     setSelection(next);
     setStatus(`grown → ${next.size} selected`);
   }
@@ -947,17 +718,7 @@ export default function App() {
   // Filter-select by colour similarity (RGB euclidean distance <= tolerance).
   function filterByColor() {
     if (!buffer) return;
-    const [tr, tg, tb] = hexToRgb(filterColor);
-    const tol2 = filterTol * filterTol;
-    const dv = viewOf(buffer);
-    const n = buffer.length / 8;
-    const next = filterAdd ? new Set(selection) : new Set<number>();
-    for (let i = 0; i < n; i++) {
-      const b = i * 32;
-      if (dv.getUint8(b + 31) === 0) continue;
-      const dr = dv.getUint8(b + 28) - tr, dg = dv.getUint8(b + 29) - tg, db = dv.getUint8(b + 30) - tb;
-      if (dr * dr + dg * dg + db * db <= tol2) next.add(i);
-    }
+    const next = colorFilterSelection(buffer, filterColor, filterTol, filterAdd ? selection : new Set());
     setSelection(next);
     setStatus(`color filter → ${next.size} selected`);
   }
@@ -965,14 +726,7 @@ export default function App() {
   // Filter-select by opacity range (u8 alpha in [min, max]).
   function filterByOpacity() {
     if (!buffer) return;
-    const lo = Math.min(filterOpMin, filterOpMax), hi = Math.max(filterOpMin, filterOpMax);
-    const dv = viewOf(buffer);
-    const n = buffer.length / 8;
-    const next = filterAdd ? new Set(selection) : new Set<number>();
-    for (let i = 0; i < n; i++) {
-      const a = dv.getUint8(i * 32 + 31);
-      if (a !== 0 && a >= lo && a <= hi) next.add(i);
-    }
+    const next = opacityFilterSelection(buffer, filterOpMin, filterOpMax, filterAdd ? selection : new Set());
     setSelection(next);
     setStatus(`opacity filter → ${next.size} selected`);
   }
@@ -1071,16 +825,7 @@ export default function App() {
   }, []);
 
   // Per-gaussian frame index (from frameCum), so exports stay replayable.
-  function frameArrayFull(): Uint32Array | null {
-    if (!buffer || !frameCum) return null;
-    const arr = new Uint32Array(buffer.length / 8);
-    let f = 0;
-    for (let i = 0; i < arr.length; i++) {
-      while (f < frameCum.length - 1 && frameCum[f] <= i) f++;
-      arr[i] = f;
-    }
-    return arr;
-  }
+  const frameArrayFull = (): Uint32Array | null => (buffer ? frameArray(buffer, frameCum) : null);
 
   function exportPly() {
     if (!buffer) return;
@@ -1240,56 +985,9 @@ export default function App() {
     if (!buffer || !bounds) return;
     setStatus(`Δ 히트맵 계산 중… (${item.name})`);
     window.setTimeout(() => {
-      const cap = radius(bounds!) * 0.05;
-      const cell = cap;
-      const key = (ix: number, iy: number, iz: number) =>
-        ((ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791)) >>> 0;
-      // Grid of overlay positions (sub-sampled to ~1M).
-      const bdv = viewOf(item.buffer);
-      const bslots = item.buffer.length / 8;
-      const bstep = Math.max(1, Math.floor(bslots / 1_000_000));
-      const grid = new Map<number, number[]>();
-      for (let i = 0; i < bslots; i += bstep) {
-        const b = i * 32;
-        if (bdv.getUint8(b + 31) === 0) continue;
-        const x = bdv.getFloat32(b, true), y = bdv.getFloat32(b + 4, true), z = bdv.getFloat32(b + 8, true);
-        const k = key(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / cell));
-        let arr = grid.get(k);
-        if (!arr) grid.set(k, (arr = []));
-        arr.push(x, y, z);
-      }
-      pushUndo(buffer!);
-      const nb = buffer!.slice();
-      const ndv = new DataView(nb.buffer);
-      const slots = nb.length / 8;
-      const cap2 = cap * cap;
-      const near2 = cap2 * 0.01; // "close enough" early exit (10% of cap)
-      for (let i = 0; i < slots; i++) {
-        const b = i * 32;
-        if (ndv.getUint8(b + 31) === 0) continue;
-        const x = ndv.getFloat32(b, true), y = ndv.getFloat32(b + 4, true), z = ndv.getFloat32(b + 8, true);
-        const ix = Math.floor(x / cell), iy = Math.floor(y / cell), iz = Math.floor(z / cell);
-        let min2 = cap2;
-        outer: for (let dx = -1; dx <= 1; dx++)
-          for (let dy = -1; dy <= 1; dy++)
-            for (let dz = -1; dz <= 1; dz++) {
-              const arr = grid.get(key(ix + dx, iy + dy, iz + dz));
-              if (!arr) continue;
-              for (let j = 0; j < arr.length; j += 3) {
-                const ddx = arr[j] - x, ddy = arr[j + 1] - y, ddz = arr[j + 2] - z;
-                const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                if (d2 < min2) {
-                  min2 = d2;
-                  if (min2 < near2) break outer;
-                }
-              }
-            }
-        const t = Math.min(1, Math.sqrt(min2) / cap);
-        ndv.setUint8(b + 28, Math.round(255 * t));
-        ndv.setUint8(b + 29, Math.round(140 * (1 - Math.abs(2 * t - 1))));
-        ndv.setUint8(b + 30, Math.round(255 * (1 - t)));
-      }
-      setBuffer(nb);
+      if (!buffer || !bounds) return;
+      pushUndo(buffer);
+      setBuffer(diffHeatmapColors(buffer, item.buffer, bounds));
       setStatus(`Δ 히트맵: 파랑=일치 · 빨강=차이 (기준 ${item.name}, undo로 복원)`);
     }, 30);
   }
@@ -1373,37 +1071,12 @@ export default function App() {
     window.addEventListener("pointerup", onUp);
   }
 
-  const stats = React.useMemo(() => {
-    if (!showStats || !buffer || !bounds) return null; // only scan when the panel is open
-    const dv = viewOf(buffer);
-    const slots = buffer.length / 8;
-    let live = 0;
-    for (let i = 0; i < slots; i++) if (dv.getUint8(i * 32 + 31) !== 0) live++;
-    // Distribution histograms (sub-sampled): opacity (u8) and splat size
-    // (sqrt of mean covariance diagonal — a linear "radius" feel).
-    const BINS = 24;
-    const opHist = new Array<number>(BINS).fill(0);
-    const sizes: number[] = [];
-    const cov = [0, 0, 0, 0, 0, 0];
-    const step = Math.max(1, Math.floor(slots / 200_000));
-    for (let i = 0; i < slots; i += step) {
-      const b = i * 32;
-      const a = dv.getUint8(b + 31);
-      if (a === 0) continue;
-      opHist[Math.min(BINS - 1, Math.floor(((a - 1) / 255) * BINS))]++;
-      readCov6(dv, b, cov);
-      sizes.push(Math.sqrt(Math.max(0, (cov[0] + cov[3] + cov[5]) / 3)));
-    }
-    sizes.sort((x, y) => x - y);
-    const sizeP95 = sizes[Math.floor(sizes.length * 0.95)] || 1e-9;
-    const sizeHist = new Array<number>(BINS).fill(0);
-    for (const s of sizes) sizeHist[Math.min(BINS - 1, Math.floor((s / sizeP95) * (BINS - 1)))]++;
-    return {
-      live, slots, mb: buffer.byteLength / 1048576,
-      size: [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]] as const,
-      opHist, sizeHist, sizeP95,
-    };
-  }, [showStats, buffer, bounds]);
+  // Only scan when the stats panel is open. Distribution histograms (opacity +
+  // splat size) are sub-sampled inside computeSceneStats.
+  const stats = React.useMemo(
+    () => (showStats && buffer && bounds ? computeSceneStats(buffer, bounds) : null),
+    [showStats, buffer, bounds],
+  );
 
   function undo() {
     if (undoStack.length === 0 || !buffer) return;
@@ -1444,32 +1117,17 @@ export default function App() {
 
   // LOD: render only every Nth gaussian when renderFrac < 1 (picking/editing still
   // use the full buffer via bufferRef, so only the drawn/sorted set shrinks).
-  const lod = React.useMemo(() => {
-    if (!display) return display;
-    const n = display.length / 8;
-    const stride = renderFrac >= 1 ? 1 : Math.max(1, Math.round(1 / renderFrac));
-    if (stride === 1) return display;
-    const m = Math.floor(n / stride);
-    const out = new Uint32Array(m * 8);
-    for (let j = 0; j < m; j++) out.set(display.subarray(j * stride * 8, j * stride * 8 + 8), j * 8);
-    return out;
-  }, [display, renderFrac]);
+  const lod = React.useMemo(
+    () => (display ? subsampleForLod(display, renderFrac) : display),
+    [display, renderFrac],
+  );
 
   // SH side buffer follows the LOD subsampling (same stride) so it stays
   // index-aligned with what's actually drawn.
-  const lodSh = React.useMemo(() => {
-    if (!sh1 || !display) return null;
-    const n = display.length / 8;
-    const stride = renderFrac >= 1 ? 1 : Math.max(1, Math.round(1 / renderFrac));
-    if (stride === 1) return sh1;
-    const m = Math.floor(n / stride);
-    const out = new Uint32Array(m * 8);
-    for (let j = 0; j < m; j++) {
-      const src = j * stride * 8;
-      if (src + 8 <= sh1.length) out.set(sh1.subarray(src, src + 8), j * 8);
-    }
-    return out;
-  }, [sh1, display, renderFrac]);
+  const lodSh = React.useMemo(
+    () => (sh1 && display ? subsampleShForLod(sh1, display.length, renderFrac) : null),
+    [sh1, display, renderFrac],
+  );
 
   const effDpr = dprAuto ? autoDprValue : dpr;
 
