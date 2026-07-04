@@ -13,7 +13,7 @@ import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./Rende
 import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
-import { splatToPacked, fetchSplatToPacked } from "./lib/splatFile";
+import { splatToPacked, fetchSplatToPacked, subsamplePacked } from "./lib/splatFile";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
@@ -204,6 +204,26 @@ export default function App() {
     const v = parseInt(lsGet("undoCapMB", "384"));
     return Number.isFinite(v) && v >= 64 ? v : 384;
   });
+  // Load-time subsampling for test/local scenes: keep every Nth gaussian
+  // (1 = all). Unlike LOD 비율 this cuts real memory, not just draw cost.
+  const [loadDiv, setLoadDiv] = React.useState(() => {
+    const v = parseInt(lsGet("loadDiv", "1"));
+    return v === 2 || v === 4 ? v : 1;
+  });
+  // Recently opened scenes (server runs + CDN test scenes; local files can't
+  // be reopened without a file handle, so they're not recorded).
+  type Recent = { k: "test"; f: string; label: string } | { k: "run"; host: string; run: string; mode: "snapshot" | "delta"; maxFrames: string; label: string };
+  const [recents, setRecents] = React.useState<Recent[]>(() => {
+    try { return JSON.parse(lsGet("recents", "[]")); } catch { return []; }
+  });
+  const recordRecent = React.useCallback((r: Recent) => {
+    setRecents((prev) => {
+      const keyOf = (x: Recent) => (x.k === "test" ? `t:${x.f}` : `r:${x.host}|${x.run}|${x.mode}`);
+      const next = [r, ...prev.filter((x) => keyOf(x) !== keyOf(r))].slice(0, 6);
+      try { localStorage.setItem(LS + "recents", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   React.useEffect(() => {
     try {
       localStorage.setItem(LS + "rotateSens", String(rotateSens));
@@ -213,8 +233,9 @@ export default function App() {
       localStorage.setItem(LS + "undoCapMB", String(undoCapMB));
       localStorage.setItem(LS + "dprAuto", dprAuto ? "1" : "0");
       localStorage.setItem(LS + "dprManual", String(dpr));
+      localStorage.setItem(LS + "loadDiv", String(loadDiv));
     } catch { /* ignore */ }
-  }, [rotateSens, zoomSens, moveSens, minFps, undoCapMB, dprAuto, dpr]);
+  }, [rotateSens, zoomSens, moveSens, minFps, undoCapMB, dprAuto, dpr, loadDiv]);
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
@@ -392,6 +413,7 @@ export default function App() {
       // load-time memory on multi-million-splat scenes.
       if (final) originalBuffer.current = final;
       sourceRef.current = { kind: "server" };
+      recordRecent({ k: "run", host: _host, run: _run, mode: _mode, maxFrames: _maxFrames, label: _run });
       if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
@@ -1081,9 +1103,14 @@ export default function App() {
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
       const isSplat = /\.splat$/i.test(file.name);
-      const { buffer: b, frameCum: fc, sh1: sh } = isSplat
-        ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null, sh1: null }
+      let { buffer: b, frameCum: fc, sh1: sh } = isSplat
+        ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null as number[] | null, sh1: null as Uint32Array | null }
         : parsePly(await file.arrayBuffer());
+      if (loadDiv > 1) {
+        b = subsamplePacked(b, loadDiv);
+        sh = sh ? subsamplePacked(sh, loadDiv) : sh;
+        fc = null; // frame boundaries don't survive subsampling
+      }
       setBuffer(b); setSh1(sh); setBounds(computeBounds(b));
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       sourceRef.current = { kind: "local" };
@@ -1114,11 +1141,12 @@ export default function App() {
           lastPct = pct;
           setStatus(pct >= 0 ? `${scene.name} ${pct}% (${mb} MB · ${splats.toLocaleString()} splats)` : `${scene.name} ${mb} MB · ${splats.toLocaleString()} splats…`);
         }
-      });
+      }, loadDiv);
       setRunId(scene.name);
       setBuffer(b); setBounds(computeBounds(b));
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       sourceRef.current = { kind: "test", file: scene.file };
+      recordRecent({ k: "test", f: scene.file, label: scene.name });
       if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
       setStatus(`${scene.name}: ${(b.length / 8).toLocaleString()} gaussians`);
     } catch (err) {
@@ -1631,6 +1659,21 @@ export default function App() {
           <button onClick={() => captureHiRes(2)} disabled={!buffer}>스크린샷 2×</button>
           <button onClick={() => captureHiRes(4)} disabled={!buffer}>스크린샷 4×</button>
           <button onClick={share} disabled={!buffer}>URL 공유</button>
+          {recents.length > 0 && <hr className="divider" />}
+          {recents.map((r) => (
+            <button key={r.k === "test" ? `t:${r.f}` : `r:${r.host}|${r.run}`} disabled={busy}
+              title={r.k === "test" ? "CDN 테스트 씬 다시 열기" : "서버 run 다시 열기"}
+              onClick={() => {
+                if (r.k === "test") {
+                  loadTestScene(TEST_SCENES.find((sc) => sc.file === r.f) ?? { name: r.label, file: r.f });
+                } else {
+                  setHost(r.host); setRunId(r.run); setMode(r.mode); setMaxFrames(r.maxFrames);
+                  load({ host: r.host, runId: r.run, mode: r.mode, maxFrames: r.maxFrames });
+                }
+              }}>
+              🕘 {r.label}
+            </button>
+          ))}
         </Dropdown>
         <Dropdown label="테스트" className="menu-only">
           {TEST_SCENES.map((s) => (
@@ -1667,7 +1710,7 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           setSettings={setSettings}
-          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, moveSens, setMoveSens, minFps, setMinFps, undoCapMB, setUndoCapMB, reloadRenderer: () => setSplatKey((k) => k + 1), showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
+          scene={{ bg, setBg, showMap, setShowMap, showGrid, setShowGrid, grid, setGrid, dpr, setDpr, dprAuto, setDprAuto, effDpr, antialias, setAntialias: toggleAntialias, rotateSens, setRotateSens, zoomSens, setZoomSens, moveSens, setMoveSens, minFps, setMinFps, undoCapMB, setUndoCapMB, loadDiv, setLoadDiv, reloadRenderer: () => setSplatKey((k) => k + 1), showAxes, setShowAxes, renderFrac, setRenderFrac, setView, cameraToOrigin, rotateScene, clipSweep, setClipSweep, bounds }}
           onClose={() => setShowPanel(false)}
         />
       )}

@@ -69,19 +69,22 @@ export function splatToPacked(data: ArrayBuffer, toZUp = false): Uint32Array {
 }
 
 /** Stream a .splat URL directly into a packed buffer, converting records as
- * chunks arrive. Progress reports bytes and splats converted so far. */
+ * chunks arrive. Progress reports bytes and splats converted so far.
+ * `stride` keeps only every stride-th record (load-time subsampling: memory
+ * for huge scenes shrinks by the same factor, including during the stream). */
 export async function fetchSplatToPacked(
   url: string,
   toZUp: boolean,
   onProgress: (loaded: number, total: number, splats: number) => void,
+  stride = 1,
 ): Promise<Uint32Array> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  if (!res.body) return splatToPacked(await res.arrayBuffer(), toZUp);
+  if (!res.body) return subsamplePacked(splatToPacked(await res.arrayBuffer(), toZUp), stride);
   const total = parseInt(res.headers.get("Content-Length") ?? "0") || 0;
 
   // Preallocate from Content-Length when known; grow geometrically otherwise.
-  let packed = new Uint32Array(Math.max(1, total ? Math.floor(total / 32) : 1 << 17) * 8);
+  let packed = new Uint32Array(Math.max(1, total ? Math.floor(total / 32 / stride) + 1 : 1 << 17) * 8);
   let dst = new DataView(packed.buffer);
   const ensure = (records: number) => {
     if (records * 8 <= packed.length) return;
@@ -94,7 +97,8 @@ export async function fetchSplatToPacked(
   // Carry buffer for a record split across chunk boundaries.
   const carry = new Uint8Array(32);
   const carryView = new DataView(carry.buffer);
-  let carryLen = 0, nRec = 0, loaded = 0;
+  let carryLen = 0, nRec = 0, seen = 0, loaded = 0;
+  const keep = () => seen++ % stride === 0;
 
   const reader = res.body.getReader();
   for (;;) {
@@ -107,17 +111,21 @@ export async function fetchSplatToPacked(
       carry.set(value.subarray(0, take), carryLen);
       carryLen += take; off = take;
       if (carryLen === 32) {
-        ensure(nRec + 1);
-        packRecord(carryView, 0, dst, nRec * 32, toZUp);
-        nRec++; carryLen = 0;
+        if (keep()) {
+          ensure(nRec + 1);
+          packRecord(carryView, 0, dst, nRec * 32, toZUp);
+          nRec++;
+        }
+        carryLen = 0;
       }
     }
     const whole = Math.floor((value.length - off) / 32);
     if (whole > 0) {
       const src = new DataView(value.buffer, value.byteOffset + off, whole * 32);
       ensure(nRec + whole);
-      for (let r = 0; r < whole; r++) packRecord(src, r * 32, dst, (nRec + r) * 32, toZUp);
-      nRec += whole;
+      for (let r = 0; r < whole; r++) {
+        if (keep()) packRecord(src, r * 32, dst, nRec++ * 32, toZUp);
+      }
       off += whole * 32;
     }
     if (off < value.length) {
@@ -128,4 +136,13 @@ export async function fetchSplatToPacked(
   }
   if (nRec === 0) throw new Error("splat: empty file");
   return nRec * 8 === packed.length ? packed : packed.slice(0, nRec * 8);
+}
+
+/** Keep every div-th gaussian of a packed (or same-stride side) buffer. */
+export function subsamplePacked(b: Uint32Array, div: number): Uint32Array {
+  if (div <= 1) return b;
+  const n = Math.floor(b.length / 8 / div);
+  const out = new Uint32Array(n * 8);
+  for (let j = 0; j < n; j++) out.set(b.subarray(j * div * 8, j * div * 8 + 8), j * 8);
+  return out;
 }
