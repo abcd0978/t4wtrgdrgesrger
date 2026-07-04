@@ -246,6 +246,8 @@ export default function App() {
   const [polyMode, setPolyMode] = React.useState(false);
   const [polyPts, setPolyPts] = React.useState<[number, number, number][]>([]);
   const [polyAdd, setPolyAdd] = React.useState(false);
+  const [savedRegions, setSavedRegions] = React.useState<{ id: number; name: string; pts: [number, number, number][] }[]>([]);
+  const regionIdRef = React.useRef(1);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -854,20 +856,20 @@ export default function App() {
       return !m;
     });
   }
-  function runPolySelect() {
-    // Convex hull of the picked gaussian vertices; select everything inside.
-    if (!buffer || polyPts.length < 4) return;
+  // Select every gaussian inside the convex hull of `pts` (4+ vertices).
+  function hullSelect(pts: [number, number, number][], additive: boolean): boolean {
+    if (!buffer || pts.length < 4) return false;
     let hull: ConvexHull;
     try {
-      hull = new ConvexHull().setFromPoints(polyPts.map((p) => new Vector3(p[0], p[1], p[2])));
+      hull = new ConvexHull().setFromPoints(pts.map((p) => new Vector3(p[0], p[1], p[2])));
     } catch {
       setStatus("다면체를 만들 수 없음 — 점들이 한 평면/직선 위에 있어요");
-      return;
+      return false;
     }
     const dv = viewOf(buffer);
     const slots = buffer.length / 8;
     const v = new Vector3();
-    const out = polyAdd ? new Set(selection) : new Set<number>();
+    const out = additive ? new Set(selection) : new Set<number>();
     for (let i = 0; i < slots; i++) {
       const b = i * 32;
       if (dv.getUint8(b + 31) === 0) continue;
@@ -875,8 +877,17 @@ export default function App() {
       if (hull.containsPoint(v)) out.add(i);
     }
     setSelection(out);
-    setPolyPts([]);
     setStatus(`◆ 다면체 선택: ${out.size.toLocaleString()}개`);
+    return true;
+  }
+  function runPolySelect() {
+    if (hullSelect(polyPts, polyAdd)) setPolyPts([]);
+  }
+  function saveRegion() {
+    if (polyPts.length < 4) return;
+    const id = regionIdRef.current++;
+    setSavedRegions((rs) => [...rs, { id, name: `영역 ${id}`, pts: polyPts }]);
+    setStatus(`영역 ${id} 저장됨 (${polyPts.length}점)`);
   }
 
   // Invert: select every visible gaussian that isn't currently selected.
@@ -1747,6 +1758,17 @@ export default function App() {
             <button className="grow ghost" onClick={() => setPolyPts([])} disabled={polyPts.length === 0}>지우기</button>
           </div>
           <button className="accent" onClick={runPolySelect} disabled={polyPts.length < 4}>✓ 다면체 안 선택</button>
+          <button onClick={saveRegion} disabled={polyPts.length < 4} title="현재 다면체를 저장해 두고 나중에 다시 선택에 사용">💾 영역 저장</button>
+          {savedRegions.length > 0 && <hr className="divider" />}
+          {savedRegions.map((r) => (
+            <div key={r.id} className="row" style={{ gap: 5 }}>
+              <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{r.name} · {r.pts.length}점</span>
+              <button onClick={() => hullSelect(r.pts, false)} title="이 영역 안을 선택">선택</button>
+              <button onClick={() => hullSelect(r.pts, true)} title="기존 선택에 추가">＋</button>
+              <button className="ghost icon" onClick={() => setPolyPts(r.pts)} title="다면체를 편집기로 불러오기">✎</button>
+              <button className="ghost icon" onClick={() => setSavedRegions((rs) => rs.filter((x) => x.id !== r.id))} title="삭제">✕</button>
+            </div>
+          ))}
         </FloatingPanel>
       )}
 
@@ -1795,6 +1817,15 @@ export default function App() {
             <button className="grow" onClick={loadCompare} disabled={busy2 || !run2}>{busy2 ? "…" : "run 겹쳐 로드"}</button>
             <button className="grow" onClick={() => compareFileRef.current?.click()} disabled={busy2}>PLY로 비교</button>
           </div>
+          <button disabled={!buffer || !originalBuffer.current || buffer === originalBuffer.current}
+            title="로드 시점의 원본을 오버레이로 올리고 A/B 와이프를 켬 — 편집 전/후를 나란히 비교"
+            onClick={() => {
+              const ob = originalBuffer.current;
+              if (!ob) return;
+              addCompare("원본 (편집 전)", ob);
+              setSettings((s2) => ({ ...s2, wipeOn: 1 }));
+              setStatus("좌: 편집본 · 우: 원본 — 가운데 선을 드래그");
+            }}>🅾 편집 전과 A/B 와이프</button>
           <input ref={compareFileRef} type="file" accept=".ply" style={{ display: "none" }} onChange={onCompareFile} />
           {compares.length > 0 && (
             <>
