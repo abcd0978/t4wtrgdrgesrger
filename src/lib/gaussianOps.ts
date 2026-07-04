@@ -12,6 +12,7 @@
 import { type Bounds, radius } from "./bounds";
 import { rotateCovariance } from "./mathUtils";
 import { hexToRgb, viewOf, readCov6, writeCov6 } from "./gaussianEdit";
+import { Selection } from "./selection";
 
 export type Vis = { mode: "all" | "hide" | "isolate"; set: Set<number> };
 
@@ -29,7 +30,7 @@ const cellKey = (ix: number, iy: number, iz: number) =>
 // ---------------------------------------------------------------------------
 export function buildDisplayBuffer(
   buffer: Uint32Array,
-  selection: Set<number>,
+  selection: Selection,
   vis: Vis,
   frameCum: number[] | null,
   frameIdx: number,
@@ -131,7 +132,7 @@ export function cropOutside(buffer: Uint32Array, mn: number[], mx: number[]): { 
 }
 
 /** Keep ONLY the selection: alpha-0 every other live gaussian. */
-export function keepOnly(buffer: Uint32Array, selection: Set<number>): { buffer: Uint32Array; deleted: number } {
+export function keepOnly(buffer: Uint32Array, selection: Selection): { buffer: Uint32Array; deleted: number } {
   const nb = buffer.slice();
   const dv = new DataView(nb.buffer);
   const slots = nb.length / 8;
@@ -146,12 +147,12 @@ export function keepOnly(buffer: Uint32Array, selection: Set<number>): { buffer:
 
 /** Copy the selection (offset +off along X) into appended slots; the copies
  * become the new selection. */
-export function duplicateSelection(buffer: Uint32Array, selection: Set<number>, off: number): { buffer: Uint32Array; newSel: Set<number> } {
+export function duplicateSelection(buffer: Uint32Array, selection: Selection, off: number): { buffer: Uint32Array; newSel: Selection } {
   const sel = [...selection];
   const nb = new Uint32Array(buffer.length + sel.length * 8);
   nb.set(buffer);
   const dv = new DataView(nb.buffer);
-  const newSel = new Set<number>();
+  const newSel = new Selection();
   let w = buffer.length;
   for (const i of sel) {
     nb.copyWithin(w, i * 8, i * 8 + 8);
@@ -215,17 +216,17 @@ export function deleteIndices(buffer: Uint32Array, indices: Iterable<number>): U
 // ---------------------------------------------------------------------------
 
 /** Every live gaussian NOT currently selected. */
-export function invertSelection(buffer: Uint32Array, selection: Set<number>): Set<number> {
+export function invertSelection(buffer: Uint32Array, selection: Selection): Selection {
   const dv = viewOf(buffer);
   const n = buffer.length / 8;
-  const next = new Set<number>();
+  const next = new Selection();
   for (let i = 0; i < n; i++) if (dv.getUint8(i * 32 + 31) !== 0 && !selection.has(i)) next.add(i);
   return next;
 }
 
 /** Add every live gaussian inside the (5%-padded) bounding box of the current
  * selection — a cheap "fill out the region" grow. */
-export function growSelection(buffer: Uint32Array, selection: Set<number>): Set<number> {
+export function growSelection(buffer: Uint32Array, selection: Selection): Selection {
   const dv = viewOf(buffer);
   let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
   for (const i of selection) {
@@ -236,7 +237,7 @@ export function growSelection(buffer: Uint32Array, selection: Set<number>): Set<
   const pad = 0.05 * Math.max(mxx - mnx, mxy - mny, mxz - mnz, 1e-6);
   mnx -= pad; mny -= pad; mnz -= pad; mxx += pad; mxy += pad; mxz += pad;
   const n = buffer.length / 8;
-  const next = new Set(selection);
+  const next = new Selection(selection);
   for (let i = 0; i < n; i++) {
     const b = i * 32;
     if (dv.getUint8(b + 31) === 0) continue;
@@ -247,12 +248,12 @@ export function growSelection(buffer: Uint32Array, selection: Set<number>): Set<
 }
 
 /** Live gaussians whose RGB is within `tol` (euclidean) of `hexColor`. */
-export function colorFilterSelection(buffer: Uint32Array, hexColor: string, tol: number, base: Set<number>): Set<number> {
+export function colorFilterSelection(buffer: Uint32Array, hexColor: string, tol: number, base: Selection): Selection {
   const [tr, tg, tb] = hexToRgb(hexColor);
   const tol2 = tol * tol;
   const dv = viewOf(buffer);
   const n = buffer.length / 8;
-  const next = new Set(base);
+  const next = new Selection(base);
   for (let i = 0; i < n; i++) {
     const b = i * 32;
     if (dv.getUint8(b + 31) === 0) continue;
@@ -263,11 +264,11 @@ export function colorFilterSelection(buffer: Uint32Array, hexColor: string, tol:
 }
 
 /** Live gaussians whose u8 alpha is within [min,max]. */
-export function opacityFilterSelection(buffer: Uint32Array, min: number, max: number, base: Set<number>): Set<number> {
+export function opacityFilterSelection(buffer: Uint32Array, min: number, max: number, base: Selection): Selection {
   const lo = Math.min(min, max), hi = Math.max(min, max);
   const dv = viewOf(buffer);
   const n = buffer.length / 8;
-  const next = new Set(base);
+  const next = new Selection(base);
   for (let i = 0; i < n; i++) {
     const a = dv.getUint8(i * 32 + 31);
     if (a !== 0 && a >= lo && a <= hi) next.add(i);
@@ -280,11 +281,11 @@ export function opacityFilterSelection(buffer: Uint32Array, min: number, max: nu
 export function selectByPosition(
   buffer: Uint32Array,
   contains: (x: number, y: number, z: number) => boolean,
-  base: Set<number>,
-): Set<number> {
+  base: Selection,
+): Selection {
   const dv = viewOf(buffer);
   const slots = buffer.length / 8;
-  const out = new Set(base);
+  const out = new Selection(base);
   for (let i = 0; i < slots; i++) {
     const b = i * 32;
     if (dv.getUint8(b + 31) === 0) continue;

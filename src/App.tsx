@@ -16,6 +16,7 @@ import {
   opacityFilterSelection, selectByPosition, frameArray, computeSceneStats,
 } from "./lib/gaussianOps";
 import { computeFloaters, computeHeatmap } from "./lib/compute";
+import { Selection } from "./lib/selection";
 import { TEST_SCENE_CDN, TEST_SCENES, DEFAULT_TEST_VIEW, type Recent } from "./lib/scenes";
 import { lsGet, lsSet, lsNum, lsBool, lsJson } from "./lib/storage";
 import { parseCamPose, formatCamPose } from "./lib/camPose";
@@ -178,7 +179,7 @@ export default function App() {
   const [showAxes, setShowAxes] = React.useState(false);
 
   // selection + editing
-  const [selection, setSelection] = React.useState<Set<number>>(new Set());
+  const [selection, setSelection] = React.useState<Selection>(new Selection());
   const [liveBuffer, setLiveBuffer] = React.useState<Uint32Array | null>(null);
   // Polygon select: screen-space vertices picked by double-click; gaussians
   // inside the (front-surface filtered) polygon get selected.
@@ -247,7 +248,7 @@ export default function App() {
   // scene changed mid-scan and abandon a stale write.
   const rawBufferRef = React.useRef<Uint32Array | null>(null);
   rawBufferRef.current = buffer;
-  const selectionRef = React.useRef<Set<number>>(selection);
+  const selectionRef = React.useRef<Selection>(selection);
   selectionRef.current = selection;
 
   // Live camera pose readout for the stats panel (polled only while open).
@@ -299,7 +300,7 @@ export default function App() {
   async function load(over?: Partial<{ host: string; runId: string; mode: "snapshot" | "delta"; maxFrames: string }>) {
     const _host = over?.host ?? host, _run = over?.runId ?? runId;
     const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
-    setBusy(true); setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set());
+    setBusy(true); setBuffer(null); setSh1(null); setBounds(null); setSelection(new Selection());
     setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
     setLive(false); liveCtxRef.current = null;
@@ -341,7 +342,7 @@ export default function App() {
       if (final) originalBuffer.current = final;
       sourceRef.current = { kind: "server" };
       recordRecent({ k: "run", host: _host, run: _run, mode: _mode, maxFrames: _maxFrames, label: _run });
-      if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
+      if (pendingSel.current) { setSelection(new Selection(pendingSel.current)); pendingSel.current = null; }
     } catch (e) {
       setStatus("error: " + (e as Error).message);
     } finally { setBusy(false); }
@@ -548,7 +549,7 @@ export default function App() {
   function deleteSelection() {
     const n = selection.size;
     commitEdit((dv, b) => dv.setUint8(b + 31, 0), `deleted ${n} gaussians`);
-    setSelection(new Set());
+    setSelection(new Selection());
   }
 
   // Inverse crop: keep ONLY the selection, delete everything else (undoable).
@@ -706,7 +707,7 @@ export default function App() {
       return false;
     }
     const v = new Vector3();
-    const out = selectByPosition(buffer, (x, y, z) => hull.containsPoint(v.set(x, y, z)), additive ? selection : new Set());
+    const out = selectByPosition(buffer, (x, y, z) => hull.containsPoint(v.set(x, y, z)), additive ? selection : new Selection());
     setSelection(out);
     setStatus(`◆ 다면체 선택: ${out.size.toLocaleString()}개`);
     return true;
@@ -741,7 +742,7 @@ export default function App() {
   // Filter-select by colour similarity (RGB euclidean distance <= tolerance).
   function filterByColor() {
     if (!buffer) return;
-    const next = colorFilterSelection(buffer, filterColor, filterTol, filterAdd ? selection : new Set());
+    const next = colorFilterSelection(buffer, filterColor, filterTol, filterAdd ? selection : new Selection());
     setSelection(next);
     setStatus(`color filter → ${next.size} selected`);
   }
@@ -749,7 +750,7 @@ export default function App() {
   // Filter-select by opacity range (u8 alpha in [min, max]).
   function filterByOpacity() {
     if (!buffer) return;
-    const next = opacityFilterSelection(buffer, filterOpMin, filterOpMax, filterAdd ? selection : new Set());
+    const next = opacityFilterSelection(buffer, filterOpMin, filterOpMax, filterAdd ? selection : new Selection());
     setSelection(next);
     setStatus(`opacity filter → ${next.size} selected`);
   }
@@ -768,7 +769,7 @@ export default function App() {
     setGroups((gs) => [...gs, { id, name: `그룹 ${id}`, indices, hidden: false, color: avgColorHex(viewOf(buffer), indices, indices.length) }]);
     setStatus(`group ${id}: ${indices.length} gaussians`);
   }
-  function selectGroup(g: Group) { setSelection(new Set(g.indices)); }
+  function selectGroup(g: Group) { setSelection(new Selection(g.indices)); }
   function toggleGroupHide(id: number) { setGroups((gs) => gs.map((g) => (g.id === id ? { ...g, hidden: !g.hidden } : g))); }
   function removeGroup(id: number) { setGroups((gs) => gs.filter((g) => g.id !== id)); }
   function recolorGroup(id: number, color: string) {
@@ -912,7 +913,7 @@ export default function App() {
   }
   async function loadLocalFile(file: File) {
     setBusy(true); setStatus(`reading ${file.name}…`);
-    setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
+    setBuffer(null); setSh1(null); setBounds(null); setSelection(new Selection()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
@@ -944,7 +945,7 @@ export default function App() {
   // local file needed. Same reset flow as onPlyFile so the camera refits.
   async function loadTestScene(scene: { name: string; file: string }) {
     setBusy(true); setStatus(`${scene.name} 다운로드 중…`);
-    setBuffer(null); setSh1(null); setBounds(null); setSelection(new Set()); setUndoStack([]); setRedoStack([]);
+    setBuffer(null); setSh1(null); setBounds(null); setSelection(new Selection()); setUndoStack([]); setRedoStack([]);
     setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     setLive(false); liveCtxRef.current = null;
@@ -966,7 +967,7 @@ export default function App() {
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       sourceRef.current = { kind: "test", file: scene.file };
       recordRecent({ k: "test", f: scene.file, label: scene.name });
-      if (pendingSel.current) { setSelection(new Set(pendingSel.current)); pendingSel.current = null; }
+      if (pendingSel.current) { setSelection(new Selection(pendingSel.current)); pendingSel.current = null; }
       setStatus(`${scene.name}: ${(b.length / 8).toLocaleString()} gaussians`);
     } catch (err) {
       setStatus(`테스트 씬 오류: ${(err as Error).message} (네트워크/CORS 확인)`);
@@ -1029,7 +1030,7 @@ export default function App() {
     setRunId(name);
     setBuffer(b); setSh1(null); setBounds(computeBounds(b));
     originalBuffer.current = b; // shared, not copied — edits are copy-on-write
-    setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
+    setSelection(new Selection()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
     setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
     setSplatKey((k) => k + 1); // remount so the new scene inits + sorts without a camera move
   }
@@ -1126,11 +1127,11 @@ export default function App() {
     if (!ob) return;
     // No copy: edits are copy-on-write, so handing back the original is safe.
     setBuffer(ob); setBounds(computeBounds(ob));
-    setSelection(new Set()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null); setGroups([]);
+    setSelection(new Selection()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null); setGroups([]);
     setSplatKey((k) => k + 1);
   }
 
-  useKeyboardShortcuts({ undo, redo, del: deleteSelection, clearSel: () => setSelection(new Set()), hasSel: selection.size > 0 });
+  useKeyboardShortcuts({ undo, redo, del: deleteSelection, clearSel: () => setSelection(new Selection()), hasSel: selection.size > 0 });
   React.useEffect(() => { if (buffer) setLastUpdate(new Date().toLocaleTimeString()); }, [buffer]);
 
   const display = liveBuffer ?? displayBuffer;
@@ -1438,7 +1439,7 @@ export default function App() {
         <button onClick={undo} disabled={undoStack.length === 0}>undo</button>
         <button onClick={redo} disabled={redoStack.length === 0}>redo</button>
         <button onClick={reset} disabled={!originalBuffer.current}>reset</button>
-        {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
+        {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Selection())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
         <Dropdown label={`도구${measureMode || polyMode || showFilter || showGroups || showCompare || compares.length ? " ●" : ""}`} className="menu-only">
           <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); setPolyMode(false); setPolyPts([]); setNoteMode(false); }} disabled={!buffer}>측정</button>
@@ -1484,7 +1485,7 @@ export default function App() {
       {selection.size > 0 && !measureMode && (
         <SelectionPanel
           selectionSize={selection.size}
-          onDeselect={() => setSelection(new Set())} onInvert={invertSelection} onGrow={growSelection}
+          onDeselect={() => setSelection(new Selection())} onInvert={invertSelection} onGrow={growSelection}
           moveStep={moveStep} setMoveStep={setMoveStep} onMove={moveSelection}
           rotStep={rotStep} setRotStep={setRotStep} onRotate={rotateSelection}
           onScaleUniform={scaleSelection} onScaleAxis={scaleSelectionXYZ}

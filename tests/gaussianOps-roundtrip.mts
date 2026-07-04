@@ -8,6 +8,7 @@ import {
   frameArray, computeSceneStats, rotateSceneBuffer,
 } from "../src/lib/gaussianOps.ts";
 import { computeBounds } from "../src/lib/bounds.ts";
+import { Selection } from "../src/lib/selection.ts";
 
 let failures = 0;
 const ok = (cond: boolean, msg: string) => { if (!cond) { failures++; console.log("  ✗ " + msg); } };
@@ -31,18 +32,18 @@ function makeBuffer(n: number) {
 {
   const { buf, set } = makeBuffer(3);
   set(0, 0, 0, 0); set(1, 1, 0, 0); set(2, 2, 0, 0);
-  const same = buildDisplayBuffer(buf, new Set(), { mode: "all", set: new Set() }, null, 0, new Set());
+  const same = buildDisplayBuffer(buf, new Selection(), { mode: "all", set: new Set() }, null, 0, new Set());
   ok(same === buf, "displayBuffer: identity fast-path returns same reference");
 
   // selection recolours to the orange highlight (255,90,0) on a copy
-  const hl = buildDisplayBuffer(buf, new Set([1]), { mode: "all", set: new Set() }, null, 0, new Set());
+  const hl = buildDisplayBuffer(buf, new Selection([1]), { mode: "all", set: new Set() }, null, 0, new Set());
   const d = new DataView(hl.buffer);
   ok(hl !== buf, "displayBuffer: selection produces a copy");
   ok(d.getUint8(1 * 32 + 28) === 255 && d.getUint8(1 * 32 + 29) === 90 && d.getUint8(1 * 32 + 30) === 0, "displayBuffer: selected gaussian is highlighted orange");
   ok(new DataView(buf.buffer).getUint8(1 * 32 + 28) === 10, "displayBuffer: original buffer untouched");
 
   // isolate hides everything not in the set
-  const iso = buildDisplayBuffer(buf, new Set(), { mode: "isolate", set: new Set([0]) }, null, 0, new Set());
+  const iso = buildDisplayBuffer(buf, new Selection(), { mode: "isolate", set: new Set([0]) }, null, 0, new Set());
   const di = new DataView(iso.buffer);
   ok(di.getUint8(0 * 32 + 31) === 255 && di.getUint8(1 * 32 + 31) === 0 && di.getUint8(2 * 32 + 31) === 0, "displayBuffer: isolate hides the rest");
 }
@@ -72,7 +73,7 @@ function makeBuffer(n: number) {
 {
   const { buf, set } = makeBuffer(4);
   for (let i = 0; i < 4; i++) set(i, i, 0, 0);
-  const { buffer: nb, deleted } = keepOnly(buf, new Set([1, 3]));
+  const { buffer: nb, deleted } = keepOnly(buf, new Selection([1, 3]));
   ok(deleted === 2, "keepOnly: deletes the non-selected live gaussians");
   const d = new DataView(nb.buffer);
   ok(d.getUint8(1 * 32 + 31) === 255 && d.getUint8(3 * 32 + 31) === 255 && d.getUint8(0 * 32 + 31) === 0, "keepOnly: keeps only the selection");
@@ -83,7 +84,7 @@ function makeBuffer(n: number) {
   const { buf } = makeBuffer(2);
   const dv = new DataView(buf.buffer);
   dv.setFloat32(0, 1, true); dv.setUint8(31, 255);
-  const { buffer: nb, newSel } = duplicateSelection(buf, new Set([0]), 0.5);
+  const { buffer: nb, newSel } = duplicateSelection(buf, new Selection([0]), 0.5);
   ok(nb.length === 3 * 8, "duplicateSelection: appends the copy");
   ok(newSel.has(2) && newSel.size === 1, "duplicateSelection: new selection is the copy");
   ok(Math.abs(new DataView(nb.buffer).getFloat32(2 * 32, true) - 1.5) < 1e-6, "duplicateSelection: copy is X-offset");
@@ -117,18 +118,18 @@ function makeBuffer(n: number) {
   };
   put(0, 0, 255, 255); put(1, 1, 250, 255); put(2, 10, 0, 255); put(3, 0, 0, 0 /* dead */);
 
-  ok([...invertSelection(buf, new Set([0]))].sort().join() === "1,2", "invertSelection: live, non-selected only");
+  ok([...invertSelection(buf, new Selection([0]))].sort().join() === "1,2", "invertSelection: live, non-selected only");
 
-  const grown = growSelection(buf, new Set([0]));
+  const grown = growSelection(buf, new Selection([0]));
   ok(grown.has(0) && !grown.has(2), "growSelection: bbox around single point stays local");
 
-  const col = colorFilterSelection(buf, "#ff0000", 10, new Set());
+  const col = colorFilterSelection(buf, "#ff0000", 10, new Selection());
   ok(col.has(0) && col.has(1) && !col.has(2), "colorFilterSelection: near-red within tolerance");
 
-  const op = opacityFilterSelection(buf, 200, 255, new Set());
+  const op = opacityFilterSelection(buf, 200, 255, new Selection());
   ok(op.has(0) && op.has(1) && op.has(2) && !op.has(3), "opacityFilterSelection: excludes the dead slot");
 
-  const byPos = selectByPosition(buf, (x) => x > 5, new Set([1]));
+  const byPos = selectByPosition(buf, (x) => x > 5, new Selection([1]));
   ok(byPos.has(1) && byPos.has(2) && byPos.size === 2, "selectByPosition: predicate + additive base");
 }
 

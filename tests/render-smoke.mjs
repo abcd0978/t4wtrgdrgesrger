@@ -95,43 +95,55 @@ async function waitForServer(url, ms) {
   throw new Error(`preview server never came up at ${url}`);
 }
 
+// One full attempt in a fresh page. Returns "red" | "blue" | "none".
+// (Under pure software GL with the JS-sorter fallback — e.g. this sandbox,
+// where the worker's WASM fetch is blocked — a page load occasionally never
+// produces a sorted frame; the outer loop just retries in a fresh page. With
+// the WASM sorter, as in CI, the first attempt renders.)
+async function attempt() {
+  // Fresh browser per attempt: a wedged software-GL context can otherwise
+  // persist across pages in the same process.
+  const browser = await chromium.launch({ executablePath: findChromium(), args: ["--use-gl=swiftshader", "--no-sandbox"] });
+  const page = await browser.newPage({ viewport: { width: 640, height: 600 } });
+  try {
+    await page.route(/huggingface\.co/, (r) => r.abort());
+    await page.goto(URL, { waitUntil: "load" });
+    await page.waitForFunction(() => /오류|error|gaussians/i.test(document.body.innerText), null, { timeout: 15_000 }).catch(() => {});
+    await page.setInputFiles('input[accept=".ply,.splat,.spz"]', {
+      name: "sorttest.splat", mimeType: "application/octet-stream", buffer: makeSplat(),
+    });
+    await page.waitForFunction(() => /loaded .*gaussians|3 gaussians/i.test(document.body.innerText), null, { timeout: 15_000 }).catch(() => {});
+    // Poll the centre pixel; each iteration does a NET-ZERO nudge (drag right
+    // then back) to force a fresh sort pass without drifting the view.
+    let r = 0, b = 0;
+    for (let i = 0; i < 16; i++) {
+      await page.mouse.move(320, 300); await page.mouse.down();
+      await page.mouse.move(340, 300, { steps: 3 }); await page.mouse.move(320, 300, { steps: 3 }); await page.mouse.up();
+      await page.waitForTimeout(500);
+      ([r, , b] = pngCentre(await page.screenshot()));
+      if (r > 150 || b > 150) break;
+    }
+    if (r > 150 && b < 100) return "red";
+    if (b > 150 && r < 100) return "blue";
+    return "none";
+  } finally {
+    await browser.close();
+  }
+}
+
 let code = 1;
 try {
   await waitForServer(URL, 30_000);
   console.log(`render-smoke: server up at ${URL}`);
-  const browser = await chromium.launch({ executablePath: findChromium(), args: ["--use-gl=swiftshader", "--no-sandbox"] });
-  const page = await browser.newPage({ viewport: { width: 640, height: 600 } });
-  page.on("console", (m) => { if (m.type() === "error") console.log("[console]", m.text()); });
-  // Abort the CDN so the first-visit auto-load fails fast and deterministically
-  // (independent of whether the runner has internet) — otherwise its async
-  // setBuffer(null) can race and wipe the file we upload, and on a networked
-  // runner it could even load the Train demo over our synthetic scene.
-  await page.route(/huggingface\.co/, (r) => r.abort());
-  await page.goto(URL, { waitUntil: "load" });
-  // Let the auto-load attempt run and settle before uploading.
-  await page.waitForFunction(() => /오류|error|gaussians/i.test(document.body.innerText), null, { timeout: 15_000 }).catch(() => {});
-  await page.setInputFiles('input[accept=".ply,.splat,.spz"]', {
-    name: "sorttest.splat", mimeType: "application/octet-stream", buffer: makeSplat(),
-  });
-  await page.waitForFunction(() => /loaded .*gaussians|3 gaussians/i.test(document.body.innerText), null, { timeout: 15_000 }).catch(() => {});
-
-  // Poll the centre pixel until the frame renders (~12s cap). Each iteration
-  // does a NET-ZERO nudge (drag right then back) — this forces a fresh sort
-  // pass (software GL can drop the first one) without accumulating any camera
-  // rotation that would drift the splat off the centre.
-  let r = 0, g = 0, b = 0;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    await page.mouse.move(320, 300); await page.mouse.down();
-    await page.mouse.move(340, 300, { steps: 3 }); await page.mouse.move(320, 300, { steps: 3 }); await page.mouse.up();
-    await page.waitForTimeout(600);
-    ([r, g, b] = pngCentre(await page.screenshot()));
-    if (r > 150 || b > 150) break; // something rendered at the centre
+  let result = "none";
+  const MAX_TRIES = 6; // software-GL insurance; CI's WASM sorter passes on try 1
+  for (let tries = 0; tries < MAX_TRIES && result === "none"; tries++) {
+    result = await attempt();
+    if (result === "none" && tries < MAX_TRIES - 1) console.log("render-smoke: no frame this attempt — retrying in a fresh browser");
   }
-  console.log(`centre pixel rgb(${r}, ${g}, ${b})`);
-  if (r > 150 && b < 100) { console.log("render-smoke: PASS — red (front) occludes blue (back)"); code = 0; }
-  else if (b > 150 && r < 100) console.log("render-smoke: FAIL — blue (back) drawn over red (front)");
-  else console.log("render-smoke: FAIL — inconclusive (centre missed the splats?)");
-  await browser.close();
+  if (result === "red") { console.log("render-smoke: PASS — red (front) occludes blue (back)"); code = 0; }
+  else if (result === "blue") console.log("render-smoke: FAIL — blue (back) drawn over red (front)");
+  else console.log("render-smoke: FAIL — no frame rendered after retries");
 } catch (e) {
   console.log("render-smoke: FAIL — " + (e?.message || e));
 }

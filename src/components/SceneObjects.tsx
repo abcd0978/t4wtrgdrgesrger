@@ -4,6 +4,7 @@ import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js"
 import { useThree, useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { type Bounds, center, radius, selCenter } from "../lib/bounds";
+import { Selection } from "../lib/selection";
 
 export interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
 export interface DragRect { x0: number; y0: number; x1: number; y1: number }
@@ -190,8 +191,8 @@ export function InputController({
   bufferRef, selectionRef, setSelection, measureMode, polyMode = false, onPolyPick, noteMode = false, onNotePick, onMeasurePick, onSetPivot,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
-  selectionRef: React.MutableRefObject<Set<number>>;
-  setSelection: (s: Set<number>) => void;
+  selectionRef: React.MutableRefObject<Selection>;
+  setSelection: (s: Selection) => void;
   measureMode: boolean;
   polyMode?: boolean; // double-clicks pick polyhedron vertex gaussians instead of selecting
   onPolyPick?: (p: [number, number, number]) => void; // world position of the picked gaussian
@@ -240,7 +241,7 @@ export function InputController({
     function pick(x0: number, y0: number, additive: boolean) {
       const buffer = bufferRef.current;
       if (!buffer) return;
-      const out = additive ? new Set(selectionRef.current) : new Set<number>();
+      const out = additive ? new Selection(selectionRef.current) : new Selection();
       const best = pickNearest(x0, y0);
       if (best >= 0) {
         if (additive && out.has(best)) out.delete(best);
@@ -628,7 +629,7 @@ export function ClipSweep({ enabled, min, max, setPos }: {
 export function DragMoveHandle({
   buffer, selection, onStart, onMove, onEnd,
 }: {
-  buffer: Uint32Array | null; selection: Set<number>;
+  buffer: Uint32Array | null; selection: Selection;
   onStart: () => void; onMove: (dx: number, dy: number, dz: number) => void; onEnd: () => void;
 }) {
   const camera = useThree((s) => s.camera);
@@ -709,7 +710,7 @@ export function DragMoveHandle({
 export function RotateHandle({
   buffer, selection, onStart, onMove, onEnd,
 }: {
-  buffer: Uint32Array | null; selection: Set<number>;
+  buffer: Uint32Array | null; selection: Selection;
   onStart: () => void; onMove: (rowMajor3x3: number[]) => void; onEnd: () => void;
 }) {
   const camera = useThree((s) => s.camera);

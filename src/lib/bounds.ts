@@ -1,4 +1,6 @@
 /** Axis-aligned bounds + center/radius helpers over a packed gaussian buffer. */
+import { type Selection } from "./selection";
+
 export interface Bounds {
   min: [number, number, number];
   max: [number, number, number];
@@ -29,7 +31,7 @@ export const radius = (b: Bounds): number =>
   Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2], 1) * 0.5;
 
 /** Centroid of the selected gaussians' centers. */
-export function selCenter(buffer: Uint32Array, selection: Set<number>): [number, number, number] {
+export function selCenter(buffer: Uint32Array, selection: Selection): [number, number, number] {
   const dv = new DataView(buffer.buffer);
   let x = 0, y = 0, z = 0;
   for (const i of selection) {

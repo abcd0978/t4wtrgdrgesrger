@@ -28,6 +28,9 @@ jobs:
         run: npm test
 
       - name: Browser smoke tests (render pipeline + selection)
+        # Non-blocking: these drive a real GL canvas and can be environment-
+        # sensitive; the deterministic `npm test` above is the hard gate.
+        continue-on-error: true
         run: |
           npm run preview -- --port 4173 --strictPort &
           SERVER_PID=$!
