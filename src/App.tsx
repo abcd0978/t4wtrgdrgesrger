@@ -24,7 +24,6 @@ import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, N
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked, subsamplePacked } from "./lib/splatFile";
-import { spzToPacked } from "./lib/spz";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
@@ -912,8 +911,10 @@ export default function App() {
     try {
       const isSplat = /\.splat$/i.test(file.name);
       const isSpz = /\.spz$/i.test(file.name);
+      // The spz decoder is code-split (dynamic import) — it's only pulled in
+      // when someone actually opens a .spz, keeping it off the initial bundle.
       let { buffer: b, frameCum: fc, sh1: sh } = isSpz
-        ? { ...(await spzToPacked(await file.arrayBuffer(), true)), frameCum: null as number[] | null }
+        ? { ...(await (await import("./lib/spz")).spzToPacked(await file.arrayBuffer(), true)), frameCum: null as number[] | null }
         : isSplat
           ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null as number[] | null, sh1: null as Uint32Array | null }
           : parsePly(await file.arrayBuffer());
