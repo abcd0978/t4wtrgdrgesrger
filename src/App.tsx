@@ -10,7 +10,7 @@ import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bou
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
 import { makeNpz, npyBytes } from "./lib/npzWrite";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, NotesView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked, subsamplePacked } from "./lib/splatFile";
@@ -248,6 +248,10 @@ export default function App() {
   const [polyAdd, setPolyAdd] = React.useState(false);
   const [savedRegions, setSavedRegions] = React.useState<{ id: number; name: string; pts: [number, number, number][] }[]>([]);
   const regionIdRef = React.useRef(1);
+  // 3D annotations (pin + label anchored to a gaussian). Shared via URL.
+  const [notes, setNotes] = React.useState<{ id: number; p: [number, number, number]; text: string }[]>([]);
+  const [noteMode, setNoteMode] = React.useState(false);
+  const noteIdRef = React.useRef(1);
   const [undoStack, setUndoStack] = React.useState<Uint32Array[]>([]);
   const [redoStack, setRedoStack] = React.useState<Uint32Array[]>([]);
   const [splatKey, setSplatKey] = React.useState(0); // bump to remount renderer after an edit
@@ -452,6 +456,12 @@ export default function App() {
       if (typeof sc.dpr === "number" && sc.dpr > 0) setDpr(sc.dpr);
       if (typeof sc.renderFrac === "number" && sc.renderFrac > 0 && sc.renderFrac <= 1) setRenderFrac(sc.renderFrac);
     }
+    if (u.notes) {
+      let nid = 1;
+      setNotes(u.notes.map((n) => ({ id: nid++, p: n.p, text: n.text })));
+      noteIdRef.current = nid;
+    }
+    if (u.path) setCamPath(u.path);
     if (u.run) {
       load({ host: u.host, runId: u.run, mode: u.mode, maxFrames: u.maxFrames });
     } else if (u.test) {
@@ -848,13 +858,20 @@ export default function App() {
   }
   function showAll() { setVis({ mode: "all", set: new Set() }); }
 
-  // --- polygon select mode helpers ---
+  // --- polyhedron select / annotation mode helpers ---
   function togglePolyMode() {
     setPolyMode((m) => {
-      if (!m) { setMeasureMode(false); setMeasurePts([]); }
+      if (!m) { setMeasureMode(false); setMeasurePts([]); setNoteMode(false); }
       setPolyPts([]);
       return !m;
     });
+  }
+  function addNoteAt(p: [number, number, number]) {
+    const text = window.prompt("주석 내용:");
+    if (!text || !text.trim()) return;
+    const id = noteIdRef.current++;
+    setNotes((ns) => [...ns, { id, p, text: text.trim().slice(0, 200) }]);
+    setStatus(`📌 주석 추가됨 (${notes.length + 1}개)`);
   }
   // Select every gaussian inside the convex hull of `pts` (4+ vertices).
   function hullSelect(pts: [number, number, number][], additive: boolean): boolean {
@@ -1021,6 +1038,23 @@ export default function App() {
       cam: v ?? undefined,
       rs: rsShare as unknown as Record<string, unknown>,
       sc: { bg, showMap, showGrid, grid, showAxes, dprAuto, dpr, renderFrac },
+      notes: notes.length > 0
+        ? notes.slice(0, 20).map((n) => ({ p: n.p.map((x) => +x.toFixed(3)) as [number, number, number], text: n.text }))
+        : undefined,
+      path: camPath.length >= 2
+        ? (() => {
+            // Resample the recorded path to <=40 keyframes so it fits a URL
+            // (the Catmull-Rom replay smooths between them anyway).
+            const step = Math.max(1, Math.ceil(camPath.length / 40));
+            const ks = camPath.filter((_, i) => i % step === 0);
+            if (ks[ks.length - 1] !== camPath[camPath.length - 1]) ks.push(camPath[camPath.length - 1]);
+            return ks.map((k) => ({
+              p: k.p.map((x) => +x.toFixed(3)) as [number, number, number],
+              t: k.t.map((x) => +x.toFixed(3)) as [number, number, number],
+              ms: +k.ms.toFixed(2),
+            }));
+          })()
+        : undefined,
     });
     const note = src?.kind === "local" ? " (로컬 파일 씬은 링크에 담을 수 없어 카메라·설정만 공유됨)" : "";
     const c = navigator.clipboard;
@@ -1699,8 +1733,11 @@ export default function App() {
         {selection.size > 0 && <button className="menu-only" onClick={() => setSelection(new Set())}>clear ({selection.size})</button>}
         {vis.mode !== "all" && <button className="menu-only" onClick={showAll}>전체 보기</button>}
         <Dropdown label={`도구${measureMode || polyMode || showFilter || showGroups || showCompare || compares.length ? " ●" : ""}`} className="menu-only">
-          <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); setPolyMode(false); setPolyPts([]); }} disabled={!buffer}>측정</button>
+          <button className={measureMode ? "active" : ""} onClick={() => { setMeasureMode((m) => !m); setMeasurePts([]); setPolyMode(false); setPolyPts([]); setNoteMode(false); }} disabled={!buffer}>측정</button>
           <button className={polyMode ? "active" : ""} onClick={togglePolyMode} disabled={!buffer} title="가우시안을 꼭짓점으로 찍어 입체 다면체를 만들고 (최소 4점), 그 안의 가우시안을 전부 선택">◆ 다면체 선택</button>
+          <button className={noteMode ? "active" : ""} disabled={!buffer}
+            title="가우시안을 더블클릭해 3D 주석(핀+메모)을 답니다 — 공유 링크에 포함됨"
+            onClick={() => setNoteMode((m) => { if (!m) { setMeasureMode(false); setPolyMode(false); setPolyPts([]); } return !m; })}>📌 주석{notes.length ? ` (${notes.length})` : ""}</button>
           <button className={showFilter ? "active" : ""} onClick={() => setShowFilter((v) => !v)} disabled={!buffer}>필터</button>
           <button className={showGroups ? "active" : ""} onClick={() => setShowGroups((v) => !v)} disabled={!buffer}>그룹{groups.length > 0 ? ` (${groups.length})` : ""}</button>
           <button className={showCompare ? "active" : ""} onClick={() => setShowCompare((v) => !v)} disabled={!buffer}>비교{compares.length ? ` (${compares.length})` : ""}</button>
@@ -1772,6 +1809,20 @@ export default function App() {
         </FloatingPanel>
       )}
 
+
+      {noteMode && (
+        <FloatingPanel title="📌 주석" onClose={() => setNoteMode(false)} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(340px, calc(100vw - 20px))">
+          <span className="muted" style={{ fontSize: 12 }}>가우시안을 더블클릭하면 메모를 답니다 — 공유 링크에 포함됩니다 (최대 20개)</span>
+          {notes.map((n) => (
+            <div key={n.id} className="row" style={{ gap: 5 }}>
+              <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>📌 {n.text}</span>
+              <button className="ghost icon" onClick={() => camApiRef.current?.setTarget(n.p)} title="이 주석을 회전축으로">🎯</button>
+              <button className="ghost icon" onClick={() => setNotes((ns) => ns.filter((x) => x.id !== n.id))} title="삭제">✕</button>
+            </div>
+          ))}
+          {notes.length > 0 && <button className="ghost" onClick={() => setNotes([])}>모두 지우기</button>}
+        </FloatingPanel>
+      )}
 
       {measureMode && (
         <FloatingPanel title="📏 측정 (다점)" onClose={() => { setMeasureMode(false); setMeasurePts([]); }} style={{ top: 64, left: "50%", transform: "translateX(-50%)" }} width="min(360px, calc(100vw - 20px))">
@@ -2094,6 +2145,7 @@ export default function App() {
         <CameraBridge apiRef={camApiRef} />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode}
           polyMode={polyMode} onPolyPick={(p) => setPolyPts((prev) => [...prev, p])}
+          noteMode={noteMode} onNotePick={addNoteAt}
           onMeasurePick={onMeasurePick}
           onSetPivot={(p) => { camApiRef.current?.setTarget(p); setStatus(`회전축 설정: (${p.map((v) => v.toFixed(2)).join(", ")})`); }} />
         {showAxes && bounds && <axesHelper args={[radius(bounds)]} />}
@@ -2105,6 +2157,7 @@ export default function App() {
         )}
         {measurePts.length > 0 && <MeasureView points={measurePts} />}
         {polyMode && polyPts.length > 0 && <PolyhedronPreview points={polyPts} />}
+        {notes.length > 0 && <NotesView notes={notes} />}
         <RenderSettingsContext.Provider value={settingsDerived}>
           {showGrid && bounds && <DashedGrid bounds={bounds} opts={grid} />}
           {display && bounds && (

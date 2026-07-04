@@ -2,6 +2,7 @@ import React from "react";
 import * as THREE from "three";
 import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 import { useThree, useFrame } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import { type Bounds, center, radius, selCenter } from "../lib/bounds";
 
 export interface GridOpts { color: string; divisions: number; dashSize: number; gapSize: number; }
@@ -165,7 +166,7 @@ export function DashedGrid({ bounds, opts }: { bounds: Bounds; opts: GridOpts })
  * target) to the gaussian under the pointer. In measure mode a double-click
  * instead reports the picked gaussian's world position (distance tool). */
 export function InputController({
-  bufferRef, selectionRef, setSelection, measureMode, polyMode = false, onPolyPick, onMeasurePick, onSetPivot,
+  bufferRef, selectionRef, setSelection, measureMode, polyMode = false, onPolyPick, noteMode = false, onNotePick, onMeasurePick, onSetPivot,
 }: {
   bufferRef: React.MutableRefObject<Uint32Array | null>;
   selectionRef: React.MutableRefObject<Set<number>>;
@@ -173,6 +174,8 @@ export function InputController({
   measureMode: boolean;
   polyMode?: boolean; // double-clicks pick polyhedron vertex gaussians instead of selecting
   onPolyPick?: (p: [number, number, number]) => void; // world position of the picked gaussian
+  noteMode?: boolean; // double-clicks drop a 3D annotation on the picked gaussian
+  onNotePick?: (p: [number, number, number]) => void;
   onMeasurePick: (p: [number, number, number]) => void;
   onSetPivot?: (p: [number, number, number]) => void;
 }) {
@@ -180,8 +183,8 @@ export function InputController({
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
-  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, polyMode, onPolyPick, onMeasurePick, onSetPivot });
-  env.current = { camera, w: size.width, h: size.height, measureMode, polyMode, onPolyPick, onMeasurePick, onSetPivot };
+  const env = React.useRef({ camera, w: size.width, h: size.height, measureMode, polyMode, onPolyPick, noteMode, onNotePick, onMeasurePick, onSetPivot });
+  env.current = { camera, w: size.width, h: size.height, measureMode, polyMode, onPolyPick, noteMode, onNotePick, onMeasurePick, onSetPivot };
 
   React.useEffect(() => {
     const el = gl.domElement;
@@ -225,15 +228,15 @@ export function InputController({
       setSelection(out);
     }
 
-    // Polyhedron vertex pick: report the picked gaussian's WORLD position so
-    // the vertex stays anchored to the scene while the camera moves.
-    function polyPick(x0: number, y0: number) {
+    // Report the picked gaussian's WORLD position (polyhedron vertices and
+    // annotations both anchor to the scene, not the screen).
+    function pickWorld(x0: number, y0: number, cb?: (p: [number, number, number]) => void) {
       const buffer = bufferRef.current;
       const idx = pickNearest(x0, y0);
-      if (idx < 0 || !buffer) return;
+      if (idx < 0 || !buffer || !cb) return;
       const dv = new DataView(buffer.buffer);
       const b = idx * 32;
-      env.current.onPolyPick?.([dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)]);
+      cb([dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true)]);
     }
 
     function measure(x0: number, y0: number) {
@@ -280,7 +283,8 @@ export function InputController({
       if (sel) {
         const dist = Math.hypot(e.clientX - sx, e.clientY - sy);
         if (dist < 5) {
-          if (env.current.polyMode) polyPick(sx, sy);
+          if (env.current.polyMode) pickWorld(sx, sy, env.current.onPolyPick);
+          else if (env.current.noteMode) pickWorld(sx, sy, env.current.onNotePick);
           else if (env.current.measureMode) measure(sx, sy);
           else pick(sx, sy, e.shiftKey);
         }
@@ -300,6 +304,28 @@ export function InputController({
     };
   }, [gl, controls, bufferRef, selectionRef, setSelection]);
   return null;
+}
+
+/** 3D annotations: a pin sphere anchored to a gaussian + a floating label.
+ * Labels are plain DOM (drei Html) so they stay readable at any zoom. */
+export function NotesView({ notes }: { notes: { id: number; p: [number, number, number]; text: string }[] }) {
+  return (
+    <>
+      {notes.map((n) => (
+        <group key={n.id} position={n.p}>
+          <Html center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+            <div style={{
+              transform: "translateY(-130%)", whiteSpace: "nowrap", maxWidth: 260,
+              overflow: "hidden", textOverflow: "ellipsis",
+              background: "rgba(0,0,0,0.72)", color: "#ffd9b8", padding: "3px 9px",
+              borderRadius: 7, fontSize: 12, border: "1px solid rgba(255,139,61,0.5)",
+            }}>📌 {n.text}</div>
+          </Html>
+        </group>
+      ))}
+      {notes.map((n) => <ScreenSphere key={"s" + n.id} position={n.p} px={5} color="#ff8b3d" />)}
+    </>
+  );
 }
 
 /** 3D preview for polyhedron selection: vertex spheres anchored to the picked

@@ -13,6 +13,8 @@ export interface UrlState {
   cam?: { p: [number, number, number]; t: [number, number, number] };
   sel?: number[];
   rs?: Record<string, unknown>; // render settings (shareable subset)
+  notes?: { p: [number, number, number]; text: string }[]; // 3D annotations
+  path?: { p: [number, number, number]; t: [number, number, number]; ms: number }[]; // recorded camera path (resampled)
   sc?: {
     bg?: string;
     showMap?: boolean;
@@ -61,6 +63,16 @@ export function readUrlState(): UrlState {
       if (o.cam && vec3ok(o.cam.p) && vec3ok(o.cam.t)) out.cam = { p: o.cam.p, t: o.cam.t };
       if (Array.isArray(o.sel)) out.sel = o.sel.filter((x) => Number.isInteger(x) && x >= 0);
       if (o.rs && typeof o.rs === "object") out.rs = o.rs;
+      if (Array.isArray(o.notes)) {
+        out.notes = o.notes
+          .filter((n) => n && vec3ok(n.p) && typeof n.text === "string")
+          .slice(0, 20)
+          .map((n) => ({ p: n.p, text: String(n.text).slice(0, 200) }));
+      }
+      if (Array.isArray(o.path)) {
+        const path = o.path.filter((k) => k && vec3ok(k.p) && vec3ok(k.t) && Number.isFinite(k.ms));
+        if (path.length >= 2 && path.length <= 60) out.path = path;
+      }
       if (o.sc && typeof o.sc === "object") out.sc = o.sc;
       return out;
     } catch { /* fall through to legacy parsing */ }
