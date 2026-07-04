@@ -14,6 +14,7 @@ import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, N
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked, subsamplePacked } from "./lib/splatFile";
+import { spzToPacked } from "./lib/spz";
 import { hexToRgb, viewOf, readCov6, writeCov6, avgColorHex } from "./lib/gaussianEdit";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { SelectionPanel, FilterPanel, GroupPanel } from "./components/EditPanels";
@@ -1148,9 +1149,12 @@ export default function App() {
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
       const isSplat = /\.splat$/i.test(file.name);
-      let { buffer: b, frameCum: fc, sh1: sh } = isSplat
-        ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null as number[] | null, sh1: null as Uint32Array | null }
-        : parsePly(await file.arrayBuffer());
+      const isSpz = /\.spz$/i.test(file.name);
+      let { buffer: b, frameCum: fc, sh1: sh } = isSpz
+        ? { ...(await spzToPacked(await file.arrayBuffer(), true)), frameCum: null as number[] | null }
+        : isSplat
+          ? { buffer: splatToPacked(await file.arrayBuffer(), true), frameCum: null as number[] | null, sh1: null as Uint32Array | null }
+          : parsePly(await file.arrayBuffer());
       if (loadDiv > 1) {
         b = subsamplePacked(b, loadDiv);
         sh = sh ? subsamplePacked(sh, loadDiv) : sh;
@@ -1160,7 +1164,7 @@ export default function App() {
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       sourceRef.current = { kind: "local" };
       if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
-      setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}`);
+      setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}${isSpz ? " · spz(β)" : ""}`);
     } catch (err) {
       setStatus("ply error: " + (err as Error).message);
     } finally { setBusy(false); }
@@ -1697,7 +1701,7 @@ export default function App() {
         setDragOver(false);
         const f = e.dataTransfer.files?.[0];
         if (!f) return;
-        if (/\.(ply|splat)$/i.test(f.name)) loadLocalFile(f);
+        if (/\.(ply|splat|spz)$/i.test(f.name)) loadLocalFile(f);
         else setStatus("지원하지 않는 파일 — .ply / .splat만");
       }}
     >
@@ -1714,9 +1718,9 @@ export default function App() {
         </select>
         {mode === "delta" && <input value={maxFrames} onChange={(e) => setMaxFrames(e.target.value)} title="max delta frames" className="menu-only" style={{ width: 56 }} />}
         <button className="accent" onClick={() => load()} disabled={busy}>{busy ? "…" : "Load"}</button>
-        <input ref={fileRef} type="file" accept=".ply,.splat" style={{ display: "none" }} onChange={onPlyFile} />
+        <input ref={fileRef} type="file" accept=".ply,.splat,.spz" style={{ display: "none" }} onChange={onPlyFile} />
         <Dropdown label="파일" className="menu-only">
-          <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY/SPLAT 열기</button>
+          <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY/SPLAT/SPZ 열기</button>
           <button onClick={exportPly} disabled={!buffer}>.ply 내보내기</button>
           <button onClick={exportNpz} disabled={!buffer}>.npz 내보내기</button>
           <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
