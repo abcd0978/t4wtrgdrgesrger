@@ -32,6 +32,71 @@ export function ContextLossGuard({ onLost, onRestored }: { onLost: () => void; o
   return null;
 }
 
+/** Shared camera pose for the side-by-side compare (position + orbit target). */
+export type SyncPose = { p: [number, number, number]; t: [number, number, number]; version: number };
+
+/** Two-way camera sync for the split compare view: whichever canvas the user
+ * moves publishes its pose to the shared ref; the other canvas(es) adopt it on
+ * the next frame. One camera per canvas kept identical -> dragging either side
+ * moves both. Only one side is ever manipulated at a time (single pointer), so
+ * there's no feedback war. A no-op when `enabled` is false. */
+export function CameraSync({ syncRef, enabled = true }: {
+  syncRef: React.MutableRefObject<SyncPose | null>;
+  enabled?: boolean;
+}) {
+  const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3; update: () => void } | null;
+  const seen = React.useRef(0);
+  // "Owner" = this canvas is being actively driven (pointer down on it, or a
+  // recent wheel). The owner publishes its pose every frame; every other canvas
+  // adopts it. Deciding ownership by input — rather than by frame-to-frame pose
+  // diffs — avoids a feedback war from sub-pixel jitter that `controls.update()`
+  // introduces on the busy main canvas.
+  const lastInput = React.useRef(-1e9);
+  const down = React.useRef(false);
+  React.useEffect(() => {
+    const el = gl.domElement;
+    const now = () => (typeof performance !== "undefined" ? performance.now() : 0);
+    const pd = () => { down.current = true; lastInput.current = now(); };
+    const pm = () => { if (down.current) lastInput.current = now(); };
+    const pu = () => { if (down.current) lastInput.current = now(); down.current = false; };
+    const wh = () => { lastInput.current = now(); };
+    el.addEventListener("pointerdown", pd);
+    el.addEventListener("wheel", wh, { passive: true });
+    window.addEventListener("pointermove", pm);
+    window.addEventListener("pointerup", pu);
+    return () => {
+      el.removeEventListener("pointerdown", pd);
+      el.removeEventListener("wheel", wh);
+      window.removeEventListener("pointermove", pm);
+      window.removeEventListener("pointerup", pu);
+    };
+  }, [gl]);
+  useFrame(() => {
+    if (!enabled) return;
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    const owner = now - lastInput.current < 250;
+    if (owner) {
+      // Publish this canvas's pose for the others to follow.
+      const p: [number, number, number] = [camera.position.x, camera.position.y, camera.position.z];
+      const t: [number, number, number] = controls?.target
+        ? [controls.target.x, controls.target.y, controls.target.z] : [0, 0, 0];
+      const version = (syncRef.current?.version ?? 0) + 1;
+      syncRef.current = { p, t, version };
+      seen.current = version;
+    } else if (syncRef.current && syncRef.current.version !== seen.current) {
+      // Someone else is driving -> adopt their pose.
+      const s = syncRef.current;
+      camera.up.set(0, 0, 1);
+      camera.position.set(s.p[0], s.p[1], s.p[2]);
+      if (controls?.target) { controls.target.set(s.t[0], s.t[1], s.t[2]); controls.update(); }
+      seen.current = s.version;
+    }
+  });
+  return null;
+}
+
 /** World-space size that projects to a constant `px` on screen at `worldPos`
  * (so gizmos look the same size regardless of camera distance). */
 function screenWorldScale(camera: THREE.Camera, worldPos: THREE.Vector3, viewportH: number, px: number): number {

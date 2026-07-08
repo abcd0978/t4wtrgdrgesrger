@@ -116,10 +116,26 @@ forward:
   trackball-rotate + fly-zoom + twist-roll), `ConstantControlSpeed`/`KeyboardFly`
   (WASD), `InputController` (front-most pick, long-press pivot, poly/note picks),
   `AutoOrbit`, `CameraPath`, `DragMoveHandle`/`RotateHandle` gizmos, `MeasureView`,
-  `PolyhedronPreview`, `NotesView`, `AdaptiveDpr`, `FpsMeter`, `CanvasCapture`.
+  `PolyhedronPreview`, `NotesView`, `AdaptiveDpr`, `FpsMeter`, `CanvasCapture`,
+  `ContextLossGuard` (WebGL context-loss recovery), `CameraSync` (side-by-side
+  compare — see below).
 - `SettingsPanel.tsx` — quality presets + all perf/render knobs.
 - `EditPanels.tsx` — selection / filter / group panels.
 - `FloatingPanel.tsx`, `Dropdown.tsx`, `Hist.tsx` — shared UI primitives.
+
+### Side-by-side compare (`splitId` in App + `CameraSync`)
+
+The renderer merges every `SplatObject` into ONE globally-sorted mesh drawn
+full-canvas, so a true split view uses **two `<Canvas>`es** — the main scene on
+the left (confined to a 50%-width wrapper), the selected compare overlay on the
+right (a minimal view-only canvas). Each canvas has its own camera; they're kept
+identical by `CameraSync` through a shared `syncCamRef` (`{p, t, version}`).
+`CameraSync` decides ownership by **input** (pointerdown/drag/wheel on its own
+canvas), not by frame-diffing the pose: the actively-driven canvas publishes its
+pose every frame and the idle one adopts it. Deciding by pose-diff instead caused
+a one-directional feedback bug (the busy main canvas's `controls.update()` jitter
+made it perpetually "the mover"). The compare panel is auto-closed on entry so it
+doesn't cover the right canvas's pointer target.
 
 ---
 

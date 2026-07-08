@@ -22,7 +22,7 @@ import { lsGet, lsSet, lsNum, lsBool, lsJson } from "./lib/storage";
 import { parseCamPose, formatCamPose } from "./lib/camPose";
 import { Hist, HELP } from "./components/Hist";
 import { DEFAULT_SETTINGS, RenderSettings, RenderSettingsContext } from "./RenderSettings";
-import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, NotesView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, ContextLossGuard, poseAt, type CamPose, type CameraApi, type GridOpts } from "./components/SceneObjects";
+import { FitCamera, ApplyCamera, CameraBridge, MeasureView, PolyhedronPreview, NotesView, DashedGrid, InputController, DragMoveHandle, RotateHandle, CanvasCapture, KeyboardFly, ConstantControlSpeed, GestureControls, AutoOrbit, CameraPath, ClipSweep, FpsMeter, AdaptiveDpr, ContextLossGuard, CameraSync, poseAt, type CamPose, type CameraApi, type GridOpts, type SyncPose } from "./components/SceneObjects";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { packedToPly, parsePly } from "./lib/ply";
 import { splatToPacked, fetchSplatToPacked, subsamplePacked } from "./lib/splatFile";
@@ -93,6 +93,10 @@ export default function App() {
   const [busy2, setBusy2] = React.useState(false);
   const [compares, setCompares] = React.useState<CompareItem[]>([]);
   const compareIdRef = React.useRef(1);
+  // Side-by-side compare: the overlay shown on the RIGHT half (main scene on the
+  // left), both driven by one synchronized camera via syncCamRef.
+  const [splitId, setSplitId] = React.useState<number | null>(null);
+  const syncCamRef = React.useRef<SyncPose | null>(null);
   const [showFilter, setShowFilter] = React.useState(false);
   const [showCrop, setShowCrop] = React.useState(false);
   const [dragOver, setDragOver] = React.useState(false);
@@ -1021,8 +1025,22 @@ export default function App() {
   }
 
   function toggleCompare(id: number) { setCompares((cs) => cs.map((c) => c.id === id ? { ...c, visible: !c.visible } : c)); }
-  function removeCompare(id: number) { setCompares((cs) => cs.filter((c) => c.id !== id)); }
-  function clearCompare() { setCompares([]); }
+  function removeCompare(id: number) { setCompares((cs) => cs.filter((c) => c.id !== id)); if (splitId === id) setSplitId(null); }
+  function clearCompare() { setCompares([]); setSplitId(null); }
+  // Toggle the side-by-side split for a compare item. On enter, seed the shared
+  // camera from the current view (so both halves start aligned) and turn off the
+  // A/B wipe, which is a different overlaid-comparison mode.
+  function toggleSplit(id: number) {
+    setSplitId((cur) => {
+      if (cur === id) return null;
+      const v = camApiRef.current?.get();
+      if (v) syncCamRef.current = { p: v.p, t: v.t, version: 1 };
+      setSettings((s) => ({ ...s, wipeOn: 0 }));
+      setShowCompare(false); // close the panel so it doesn't cover the right view
+      setStatus("좌우 분할 비교 — 한쪽을 움직이면 반대쪽도 같이 움직입니다");
+      return id;
+    });
+  }
   // Replace the whole scene with `b`: it becomes the active/editable main buffer
   // (selection, gizmos, scene-rotation all act on it). Keeps the camera.
   function becomeScene(name: string, b: Uint32Array) {
@@ -1165,6 +1183,11 @@ export default function App() {
     ...settings,
     lodDistWorld: settings.lodDist > 0 && bounds ? settings.lodDist * radius(bounds) : 0,
   }), [settings, bounds]);
+
+  // Side-by-side split: the compare item shown on the right half + its bounds.
+  const splitItem = React.useMemo(() => compares.find((c) => c.id === splitId) ?? null, [compares, splitId]);
+  const splitBounds = React.useMemo(() => (splitItem ? computeBounds(splitItem.buffer) : null), [splitItem]);
+  const splitActive = splitItem != null;
 
   // Move the camera to look at the data centre from `dir` (centre -> camera).
   function setView(dir: [number, number, number]) {
@@ -1601,6 +1624,7 @@ export default function App() {
                 <div key={c.id} className="row" style={{ gap: 5 }}>
                   <button className="ghost icon" onClick={() => toggleCompare(c.id)} title={c.visible ? "숨기기" : "보이기"}>{c.visible ? "👁" : "🚫"}</button>
                   <span className="grow" style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", opacity: c.visible ? 1 : 0.5 }} title={c.name}>{c.name} · {(c.buffer.length / 8).toLocaleString()}</span>
+                  <button className={splitId === c.id ? "active" : ""} onClick={() => toggleSplit(c.id)} title="좌우 분할 비교 — 왼쪽=현재 씬, 오른쪽=이 오버레이, 카메라 동기화">⇆ 분할</button>
                   <button onClick={() => switchToMain(c)} title="이 run을 편집 대상(씬)으로">편집</button>
                   <button onClick={() => diffHeatmap(c)} title="현재 씬을 이 오버레이와의 거리로 색칠 (파랑=일치, 빨강=차이 · undo로 복원)">Δ</button>
                   <button className="ghost icon" onClick={() => removeCompare(c.id)} title="제거">✕</button>
@@ -1841,7 +1865,9 @@ export default function App() {
       {/* antialias off: MSAA does nothing for splats (alpha-blended quads) and
           costs fill-rate. preserveDrawingBuffer off: skips the per-frame
           backbuffer copy; CanvasCapture re-renders right before reading pixels
-          instead, and captureStream (video export) grabs frames as they draw. */}
+          instead, and captureStream (video export) grabs frames as they draw.
+          In split-compare mode this canvas is confined to the left half. */}
+      <div style={splitActive ? { position: "absolute", left: 0, top: 0, bottom: 0, width: "50%" } : { position: "absolute", inset: 0 }}>
       <Canvas key={`${antialias ? "gl-aa" : "gl"}:${glEpoch}`} dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
         <color attach="background" args={[bg]} />
         <OrbitControls makeDefault enableDamping={false} enableZoom={false} enableRotate={false} />
@@ -1856,6 +1882,7 @@ export default function App() {
         <FpsMeter elRef={fpsElRef} />
         <AdaptiveDpr enabled={dprAuto} value={autoDprValue} setValue={setAutoDprValue} max={nativeDpr} minFps={minFps} />
         <CameraBridge apiRef={camApiRef} />
+        <CameraSync syncRef={syncCamRef} enabled={splitActive}  />
         <InputController bufferRef={bufferRef} selectionRef={selectionRef} setSelection={setSelection} measureMode={measureMode}
           polyMode={polyMode} onPolyPick={(p) => setPolyPts((prev) => [...prev, p])}
           noteMode={noteMode} onNotePick={addNoteAt}
@@ -1879,12 +1906,43 @@ export default function App() {
               {pendingView.current && <ApplyCamera view={pendingView.current} onApplied={() => setCamDone(true)} />}
               <SplatRenderContext key={splatKey}>
                 {showMap && <SplatObject buffer={lod ?? display} sh1={lodSh ?? undefined} />}
-                {compares.map((c) => c.visible && <SplatObject key={c.id} buffer={c.buffer} />)}
+                {/* In split mode the left half shows only the main scene; the
+                    split item renders in the right canvas instead. */}
+                {!splitActive && compares.map((c) => c.visible && <SplatObject key={c.id} buffer={c.buffer} />)}
               </SplatRenderContext>
             </>
           )}
         </RenderSettingsContext.Provider>
       </Canvas>
+      </div>
+
+      {/* Right half of the side-by-side compare: the selected overlay, driven by
+          the SAME camera (synced through syncCamRef) so moving either side moves
+          both. View-only — no picking/gizmos/notes. */}
+      {splitActive && (
+        <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: "50%", borderLeft: "2px solid rgba(255,255,255,0.35)" }}>
+          <Canvas dpr={effDpr} gl={{ antialias, preserveDrawingBuffer: false, powerPreference: "high-performance" }} camera={{ position: [5, -5, 5], up: [0, 0, 1], near: 0.01, far: 1000 }}>
+            <color attach="background" args={[bg]} />
+            <OrbitControls makeDefault enableDamping={false} enableZoom={false} enableRotate={false} />
+            <ConstantControlSpeed moveSens={moveSens} />
+            <GestureControls sceneRadius={splitBounds ? radius(splitBounds) : 1} zoomSens={zoomSens} rotateSens={rotateSens} />
+            <KeyboardFly sceneRadius={splitBounds ? radius(splitBounds) : 1} moveSens={moveSens} />
+            <CameraSync syncRef={syncCamRef} enabled={splitActive}  />
+            <RenderSettingsContext.Provider value={settingsDerived}>
+              <SplatRenderContext>
+                <SplatObject buffer={splitItem.buffer} />
+              </SplatRenderContext>
+            </RenderSettingsContext.Provider>
+          </Canvas>
+        </div>
+      )}
+      {splitActive && (
+        <>
+          <div className="panel" style={{ position: "absolute", left: 10, bottom: 12, padding: "3px 10px", fontSize: 12, pointerEvents: "none" }}>◀ {runId || "현재 씬"}</div>
+          <div className="panel" style={{ position: "absolute", left: "calc(50% + 10px)", bottom: 12, padding: "3px 10px", fontSize: 12, pointerEvents: "none" }}>{splitItem.name} ▶</div>
+          <button className="panel" style={{ position: "absolute", left: "50%", top: 62, transform: "translateX(-50%)", padding: "3px 10px", fontSize: 12 }} onClick={() => setSplitId(null)} title="분할 비교 끄기">✕ 분할 종료</button>
+        </>
+      )}
       {glLost && (
         <div style={{
           position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
