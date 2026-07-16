@@ -43,7 +43,13 @@ const FPS_MIN = 0.5, FPS_MAX = 60;
 
 export default function App() {
   const [host, setHost] = React.useState(() => lsGet("host", ""));
-  const [runId, setRunId] = React.useState(() => lsGet("runId", "online-3dgs-desk-20260624-spnet-gated-full-r2-deltas"));
+  const [runId, setRunId] = React.useState(() => {
+    // Migrate away old localStorage where loading a test scene wrote its name
+    // (e.g. "Train") into runId — that made Load fetch a non-run from the server.
+    const saved = lsGet("runId", "");
+    const isTestName = TEST_SCENES.some((s) => s.name === saved);
+    return saved && !isTestName ? saved : "online-3dgs-desk-20260624-spnet-gated-full-r2-deltas";
+  });
   const [runs, setRuns] = React.useState<RunInfo[]>([]);
   // Display / export name of the CURRENT scene (server run, CDN test scene, or
   // local file). Kept separate from `runId` so loading a test/local scene never
