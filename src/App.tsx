@@ -44,6 +44,10 @@ export default function App() {
   const [host, setHost] = React.useState(() => lsGet("host", ""));
   const [runId, setRunId] = React.useState(() => lsGet("runId", "online-3dgs-desk-20260624-spnet-gated-full-r2-deltas"));
   const [runs, setRuns] = React.useState<RunInfo[]>([]);
+  // Display / export name of the CURRENT scene (server run, CDN test scene, or
+  // local file). Kept separate from `runId` so loading a test/local scene never
+  // pollutes the server "run" dropdown or makes Load fetch a non-run name.
+  const [sceneName, setSceneName] = React.useState("");
   const [mode, setMode] = React.useState<"snapshot" | "delta">(() => (lsGet("mode", "snapshot") === "delta" ? "delta" : "snapshot"));
   const [maxFrames, setMaxFrames] = React.useState(() => lsGet("maxFrames", "100"));
   const [buffer, setBuffer] = React.useState<Uint32Array | null>(null);
@@ -345,6 +349,7 @@ export default function App() {
       // load-time memory on multi-million-splat scenes.
       if (final) originalBuffer.current = final;
       sourceRef.current = { kind: "server" };
+      setSceneName(_run); // exports/title named by the server run
       recordRecent({ k: "run", host: _host, run: _run, mode: _mode, maxFrames: _maxFrames, label: _run });
       if (pendingSel.current) { setSelection(new Selection(pendingSel.current)); pendingSel.current = null; }
     } catch (e) {
@@ -857,7 +862,7 @@ export default function App() {
 
   function exportPly() {
     if (!buffer) return;
-    downloadBlob(packedToPly(buffer, frameArrayFull() ?? undefined), `${runId || "gaussians"}.ply`);
+    downloadBlob(packedToPly(buffer, frameArrayFull() ?? undefined), `${sceneName || "gaussians"}.ply`);
     setStatus("exported .ply");
   }
 
@@ -893,7 +898,7 @@ export default function App() {
       { name: "rotation_xyzw.npy", bytes: npyBytes("<f4", [n, 4], rot) },
       { name: "source_frame_index.npy", bytes: npyBytes("<i4", [n], frame) },
     ]);
-    downloadBlob(npz, `${runId || "gaussians"}.npz`);
+    downloadBlob(npz, `${sceneName || "gaussians"}.npz`);
     setStatus(`exported .npz (${n} gaussians)`);
   }
 
@@ -903,7 +908,7 @@ export default function App() {
     const sel = [...selection];
     const out = new Uint32Array(sel.length * 8);
     for (let j = 0; j < sel.length; j++) out.set(buffer.subarray(sel[j] * 8, sel[j] * 8 + 8), j * 8);
-    downloadBlob(packedToPly(out), `${runId || "gaussians"}_sel.ply`);
+    downloadBlob(packedToPly(out), `${sceneName || "gaussians"}_sel.ply`);
     setStatus(`exported ${sel.length} selected (.ply)`);
   }
 
@@ -938,6 +943,7 @@ export default function App() {
       setBuffer(b); setSh1(sh); setBounds(computeBounds(b));
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       sourceRef.current = { kind: "local" };
+      setSceneName(file.name.replace(/\.(ply|splat|spz)$/i, "")); // export/title name
       if (fc) { setFrameCum(fc); setFrameIdx(fc.length - 1); setClipIn(0); setClipOut(fc.length - 1); }
       setStatus(`loaded ${file.name}: ${b.length / 8} gaussians${fc ? ` · ${fc.length} frames` : ""}${isSpz ? " · spz(β)" : ""}`);
     } catch (err) {
@@ -966,7 +972,7 @@ export default function App() {
           setStatus(pct >= 0 ? `${scene.name} ${pct}% (${mb} MB · ${splats.toLocaleString()} splats)` : `${scene.name} ${mb} MB · ${splats.toLocaleString()} splats…`);
         }
       }, loadDiv);
-      setRunId(scene.name);
+      setSceneName(scene.name); // NOT setRunId — keep it out of the server run dropdown
       setBuffer(b); setBounds(computeBounds(b));
       originalBuffer.current = b; // shared, not copied — edits are copy-on-write
       sourceRef.current = { kind: "test", file: scene.file };
@@ -1045,7 +1051,7 @@ export default function App() {
   // (selection, gizmos, scene-rotation all act on it). Keeps the camera.
   function becomeScene(name: string, b: Uint32Array) {
     sourceRef.current = { kind: "local" };
-    setRunId(name);
+    setSceneName(name);
     setBuffer(b); setSh1(null); setBounds(computeBounds(b));
     originalBuffer.current = b; // shared, not copied — edits are copy-on-write
     setSelection(new Selection()); setUndoStack([]); setRedoStack([]); setLiveBuffer(null);
@@ -1055,7 +1061,7 @@ export default function App() {
   // Make a compare overlay the scene; the old main is pushed back as an overlay.
   function switchToMain(item: CompareItem) {
     if (!buffer) return;
-    const oldMain: CompareItem = { id: compareIdRef.current++, name: runId || "이전 run", buffer, visible: true };
+    const oldMain: CompareItem = { id: compareIdRef.current++, name: sceneName || "이전 run", buffer, visible: true };
     setCompares((cs) => [oldMain, ...cs.filter((c) => c.id !== item.id)]);
     becomeScene(item.name, item.buffer);
     setStatus(`편집 대상 → ${item.name} (${item.buffer.length / 8} gaussians)`);
@@ -1070,7 +1076,7 @@ export default function App() {
     let o = 0;
     for (const p of parts) { merged.set(p, o); o += p.length; }
     setCompares((cs) => cs.filter((c) => !c.visible)); // merged ones consumed; hidden ones kept
-    becomeScene(runId || "merged", merged);
+    becomeScene(sceneName || "merged", merged);
     setStatus(`씬 합치기: ${parts.length}개 → ${merged.length / 8} gaussians`);
   }
 
@@ -1096,7 +1102,7 @@ export default function App() {
       frames = new Uint32Array(hi - lo);
       for (let j = 0; j < hi - lo; j++) frames[j] = Math.max(0, full[lo + j] - a);
     }
-    downloadBlob(packedToPly(buffer.subarray(lo * 8, hi * 8), frames), `${runId || "gaussians"}_f${a}-${b}.ply`);
+    downloadBlob(packedToPly(buffer.subarray(lo * 8, hi * 8), frames), `${sceneName || "gaussians"}_f${a}-${b}.ply`);
     setStatus(`exported frames ${a}–${b} → ${hi - lo} gaussians (.ply)`);
   }
 
@@ -1294,13 +1300,13 @@ export default function App() {
   // Record a flythrough of the recorded camera path (auto-stops at path end).
   function exportFlythrough() {
     if (camPath.length < 2) { setStatus("녹화된 카메라 경로가 없음 (먼저 경로 녹화)"); return; }
-    if (!startVideoRecording(`${runId || "viser"}_flythrough.webm`)) return;
+    if (!startVideoRecording(`${sceneName || "viser"}_flythrough.webm`)) return;
     setCamRecording(false); setTouring(false); setCamSeekMs(0); setCamReplaying(true);
   }
   // Record one full turntable revolution (auto-stops after ~360°).
   function exportTurntable() {
     if (!buffer) return;
-    if (!startVideoRecording(`${runId || "viser"}_turntable.webm`)) return;
+    if (!startVideoRecording(`${sceneName || "viser"}_turntable.webm`)) return;
     setCamReplaying(false); setTouring(false); setAutoOrbit(true);
     const durMs = (2 * Math.PI / autoOrbitSpeed) * 1000 * 1.05 + 200;
     turntableTimer.current = window.setTimeout(() => { setAutoOrbit(false); videoRecRef.current?.stop(); }, durMs);
@@ -1352,7 +1358,7 @@ export default function App() {
         entries.push({ name: `frame_${String(i).padStart(4, "0")}.png`, bytes: new Uint8Array(await blob.arrayBuffer()) });
         if (i % 10 === 0 || i === poses.length - 1) setStatus(`고품질 프레임 렌더 ${i + 1}/${poses.length}…`);
       }
-      downloadBlob(makeNpz(entries), `${runId || "viser"}_${kind}_30fps_frames.zip`);
+      downloadBlob(makeNpz(entries), `${sceneName || "viser"}_${kind}_30fps_frames.zip`);
       setStatus(`프레임 ${poses.length}장 ZIP 저장 (30fps) — ffmpeg -framerate 30 -i frame_%04d.png 으로 영상화`);
     } catch (e) {
       setStatus("프레임 내보내기 오류: " + (e as Error).message);
@@ -1371,7 +1377,7 @@ export default function App() {
     setDpr(Math.min(effDpr * scale, 8));
     setStatus(`${scale}× 스크린샷 렌더링…`);
     window.setTimeout(() => {
-      captureRef.current?.(`${runId || "viser"}_${scale}x.png`);
+      captureRef.current?.(`${sceneName || "viser"}_${scale}x.png`);
       setDpr(prevDpr); setDprAuto(prevAuto);
       setStatus(`${scale}× 스크린샷 저장됨`);
     }, 200);
@@ -1432,7 +1438,7 @@ export default function App() {
           <button onClick={() => fileRef.current?.click()} disabled={busy}>PLY/SPLAT/SPZ 열기</button>
           <button onClick={exportPly} disabled={!buffer}>.ply 내보내기</button>
           <button onClick={exportNpz} disabled={!buffer}>.npz 내보내기</button>
-          <button onClick={() => captureRef.current?.(`${runId || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
+          <button onClick={() => captureRef.current?.(`${sceneName || "viser"}.png`)} disabled={!buffer}>스크린샷 (PNG)</button>
           <button onClick={() => captureHiRes(2)} disabled={!buffer}>스크린샷 2×</button>
           <button onClick={() => captureHiRes(4)} disabled={!buffer}>스크린샷 4×</button>
           <button onClick={share} disabled={!buffer}>URL 공유</button>
