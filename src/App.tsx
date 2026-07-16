@@ -4,7 +4,8 @@ import { ConvexHull } from "three/examples/jsm/math/ConvexHull.js";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { SplatRenderContext, SplatObject } from "./splat/GaussianSplats";
-import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, type RunInfo } from "./lib/gaussianApi";
+import { getDeltaManifest, getAddedNpz, getSnapshot, getRuns, getTimeline, type RunInfo } from "./lib/gaussianApi";
+import { ServerPanel } from "./components/ServerPanel";
 import { unzipNpz, npzToPacked } from "./lib/pack";
 import { type Bounds, computeBounds, center, radius, selCenter } from "./lib/bounds";
 import { rotateCovariance, scaleCovariance, rotationAboutAxis, covarianceToScaleRotation } from "./lib/mathUtils";
@@ -93,6 +94,10 @@ export default function App() {
   const [groups, setGroups] = React.useState<Group[]>([]);
   const groupIdRef = React.useRef(1);
   const [showCompare, setShowCompare] = React.useState(false);
+  const [showServer, setShowServer] = React.useState(false);
+  // Per-slider-position elapsed seconds (from /timeline), index-aligned with
+  // frameCum, for the timeline label. Empty when a run has no timeline.
+  const [frameElapsed, setFrameElapsed] = React.useState<number[] | null>(null);
   const [run2, setRun2] = React.useState("");
   const [busy2, setBusy2] = React.useState(false);
   const [compares, setCompares] = React.useState<CompareItem[]>([]);
@@ -310,7 +315,7 @@ export default function App() {
     const _mode = over?.mode ?? mode, _maxFrames = over?.maxFrames ?? maxFrames;
     setBusy(true); setBuffer(null); setSh1(null); setBounds(null); setSelection(new Selection());
     setUndoStack([]); setRedoStack([]); setLiveBuffer(null); originalBuffer.current = null;
-    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setPlaying(false); setGroups([]);
+    setVis({ mode: "all", set: new Set() }); setFrameCum(null); setFrameElapsed(null); setPlaying(false); setGroups([]);
     setLive(false); liveCtxRef.current = null;
     try {
       let final: Uint32Array | null = null;
@@ -341,6 +346,13 @@ export default function App() {
         const cum = manifest.frames.slice(0, limit).map((f) => f.cumulative_gaussian_count);
         setFrameCum(cum); setFrameIdx(cum.length - 1);
         setClipIn(0); setClipOut(cum.length - 1);
+        // Timeline gives per-frame elapsed_sec for the slider label. Optional —
+        // a run may not expose /timeline, so this never fails the load.
+        try {
+          const tl = await getTimeline(_host, _run);
+          const bySec = new Map(tl.frames.map((f) => [f.frame_index, f.elapsed_sec]));
+          setFrameElapsed(manifest.frames.slice(0, limit).map((f) => bySec.get(f.frame_index) ?? NaN));
+        } catch { setFrameElapsed(null); }
         liveCtxRef.current = { host: _host, run: _run }; // enable live polling for this run
         final = capacity;
       }
@@ -923,7 +935,7 @@ export default function App() {
   async function loadLocalFile(file: File) {
     setBusy(true); setStatus(`reading ${file.name}…`);
     setBuffer(null); setSh1(null); setBounds(null); setSelection(new Selection()); setUndoStack([]); setRedoStack([]);
-    setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
+    setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null); setFrameElapsed(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     try {
       const isSplat = /\.splat$/i.test(file.name);
@@ -956,7 +968,7 @@ export default function App() {
   async function loadTestScene(scene: { name: string; file: string }) {
     setBusy(true); setStatus(`${scene.name} 다운로드 중…`);
     setBuffer(null); setSh1(null); setBounds(null); setSelection(new Selection()); setUndoStack([]); setRedoStack([]);
-    setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null);
+    setLiveBuffer(null); setVis({ mode: "all", set: new Set() }); setFrameCum(null); setFrameElapsed(null);
     setPlaying(false); setCamDone(false); setGroups([]); pendingView.current = null;
     setLive(false); liveCtxRef.current = null;
     try {
@@ -1485,6 +1497,7 @@ export default function App() {
         <button className={"menu-only" + (showCamPanel || autoOrbit || camRecording || camReplaying ? " active" : "")} onClick={() => setShowCamPanel((v) => !v)} disabled={!buffer}>카메라{autoOrbit || camRecording ? " ●" : ""}</button>
         {hasTimeline && <button className={showTimeline ? "active" : ""} onClick={() => setShowTimeline((v) => !v)}>타임라인</button>}
         {hasTimeline && <button className={live ? "active" : ""} onClick={() => setLive((v) => !v)} title="새 delta 프레임 자동 폴링">{live ? "● 라이브" : "라이브"}</button>}
+        <button className={"menu-only" + (showServer ? " active" : "")} onClick={() => setShowServer((v) => !v)} title="Viewer Server에 replay/학습/실시간 촬영 시작 요청">🛰 서버</button>
         <button className="menu-only" onClick={() => setShowStats((v) => !v)}>통계</button>
         <button className="ghost icon menu-only" onClick={() => setShowHelp((v) => !v)}>?</button>
         <button className="ghost icon menu-only" onClick={() => setShowPanel((v) => !v)}>⚙</button>
@@ -1592,6 +1605,20 @@ export default function App() {
         <GroupPanel
           onClose={() => setShowGroups(false)} selectionSize={selection.size} groups={groups}
           onCreate={createGroup} onSelect={selectGroup} onToggleHide={toggleGroupHide} onRecolor={recolorGroup} onRemove={removeGroup}
+        />
+      )}
+
+      {showServer && (
+        <ServerPanel
+          host={host}
+          onClose={() => setShowServer(false)}
+          setStatus={setStatus}
+          onLoadRun={(rid) => {
+            // A started replay/training run may still be recording — timeline/
+            // manifest can 404 for a moment; the user can re-Load if it does.
+            setRunId(rid); setMode("delta");
+            load({ runId: rid, mode: "delta" });
+          }}
         />
       )}
 
@@ -1741,7 +1768,10 @@ export default function App() {
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               <button className={playing ? "active icon" : "icon"} onClick={() => setPlaying((p) => !p)} title="재생 / 일시정지">{playing ? "⏸" : "▶"}</button>
               <button className="ghost num" style={{ minWidth: 92, cursor: "ew-resize", touchAction: "none", userSelect: "none" }} onPointerDown={startFpsDrag} title="좌우로 드래그해서 재생 속도 조절">⇄ {Number.isInteger(fps) ? fps : fps.toFixed(1)} fps</button>
-              <span className="num muted" style={{ whiteSpace: "nowrap" }}>{frameIdx + 1}/{frameCum!.length}</span>
+              <span className="num muted" style={{ whiteSpace: "nowrap" }}>
+                {frameIdx + 1}/{frameCum!.length}
+                {frameElapsed && Number.isFinite(frameElapsed[frameIdx]) ? ` · ${frameElapsed[frameIdx].toFixed(1)}s` : ""}
+              </span>
               <span className="grow" />
               <button onClick={() => setClipIn(frameIdx)} title="현재 프레임을 구간 시작으로">구간 시작</button>
               <button onClick={() => setClipOut(frameIdx)} title="현재 프레임을 구간 끝으로">구간 끝</button>
